@@ -2,7 +2,7 @@
 name = "retaugen"
 version = "0.1.0"
 description = "A Tauri App"
-authors = ["you"]
+authors = ["Anubhab"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -15,11 +15,12 @@ crate-type = ["lib", "cdylib", "staticlib"]
 tauri-build = { version = "2.0.0-rc", features = [] }
 
 [dependencies]
+anyhow             = "1"
 candle-core        = { git = "https://github.com/huggingface/candle.git", version = "0", features = ["metal"] }
-candle-onnx        = { git = "https://github.com/huggingface/candle.git", version = "0" }
+candle-nn          = { git = "https://github.com/huggingface/candle.git", version = "0", features = ["metal"] }
 tauri              = { version = "2.0.0-rc", features = [] }
 tauri-plugin-shell = "2.0.0-rc"
 serde              = { version = "1", features = ["derive"] }
 serde_json         = "1"
-
+tokenizers         = "0"
 
