@@ -2,6 +2,8 @@ use candle_core::{DType, Device, IndexOp, Tensor, D};
 use candle_nn::{linear, linear_no_bias, rms_norm, Activation, Linear, Module, RmsNorm, VarBuilder};
 use std::sync::Arc;
 
+use crate::utils::masked_fill;
+
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Config {
     pub vocab_size: usize,
@@ -19,6 +21,31 @@ pub struct Config {
     pub use_sliding_window: bool,
     pub hidden_act: Activation,
     pub lm_head: EmbedHead
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            hidden_act: candle_nn::Activation::Silu,
+            vocab_size: 151646,
+            hidden_size: 1536,
+            intermediate_size: 8960,
+            num_hidden_layers: 28,
+            num_attention_heads: 12,
+            num_key_value_heads: 2,
+            max_position_embeddings: 131072,
+            sliding_window: 131072,
+            max_window_layers: 21,
+            tie_word_embeddings: false,
+            rope_theta: 1000000.,
+            rms_norm_eps: 1e-06,
+            use_sliding_window: false,
+            lm_head: EmbedHead {
+                in_features: 1536,
+                out_features: 1024
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
@@ -360,12 +387,6 @@ impl Model {
         }
         xs.apply(&self.norm)
     }
-
-    // pub fn clear_kv_cache(&mut self) {
-    //     for layer in self.layers.iter_mut() {
-    //         layer.clear_kv_cache()
-    //     }
-    // }
 }
 
 #[derive(Debug, Clone)]
@@ -386,15 +407,67 @@ impl Stella {
         })
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> candle_core::Result<Tensor> {
-        let (_b_size, seq_len) = input_ids.dims2()?;
-        self.base_model
-            .forward(input_ids, seqlen_offset, None)?
-            .narrow(1, seq_len - 1, 1)?
-            .apply(&self.lm_head)
+    pub fn forward(&mut self, input_ids: &Tensor, mask: &Tensor, seqlen_offset: usize) -> candle_core::Result<Tensor> {
+        let x = self.base_model.forward(input_ids, seqlen_offset, None)?;
+        // let x = masked_fill(&x, mask, 0.)?;
+        let x = self.mean_pool(&x, mask)?;
+        println!("{x}");
+        self.lm_head.forward(&x)
     }
 
-    // pub fn clear_kv_cache(&mut self) {
-    //     self.base_model.clear_kv_cache()
-    // }
+    fn expand(bsz: usize, seq_len: usize, hidden_dim: usize, mask: &Tensor) -> candle_core::Result<Tensor> {
+        let mut expanded = Tensor::zeros((bsz, seq_len, hidden_dim), mask.dtype(), mask.device())?;
+    
+        // Iterate over the batch and sequence dimensions
+        for b in 0..bsz {
+            for s in 0..seq_len {
+                let value = mask.get(b)?.get(s)?;
+                
+                if value.to_scalar::<u8>()? == 1 {
+                    // If the value is 1, fill the corresponding slice with ones
+                    expanded = expanded.slice_assign(
+                        &[b..b+1, s..s+1, 0..hidden_dim],
+                        &Tensor::ones((1, 1, hidden_dim), mask.dtype(), mask.device())?
+                    )?;
+                }
+            }
+        }
+
+        Ok(expanded)
+    }
+
+    fn mean_pool(&self, x: &Tensor, mask: &Tensor) -> candle_core::Result<Tensor> {
+        println!("Before mask: {:?}", x.shape());
+        let (batch_size, seq_len, hidden_dim) = x.dims3()?;
+        // expanding the shape of the mask from [B_Sz, Seq_len] -> [B_Sz, Seq_len, Hidden_size]
+        let mask = mask.unsqueeze(2)?.expand((batch_size, seq_len, hidden_dim))?.to_dtype(DType::F32)?;
+        println!("Mask shape: {:?}", mask.shape());
+        
+        let x = (x * &mask)?;
+        println!("After mask: {:?}", x.shape());
+
+        // Sum and normalize
+        let sum_mask = mask.sum(1)?.unsqueeze(1)?;
+        let query_vectors = (x.sum(1)? / sum_mask)?;
+        
+        // Each 1 in mask would become a tensor of [1 ...], 0 would become [0 ..]
+        // let (bcz, seq_len, hidden_dim) = x.dims3()?;
+        // let expanded_mask = Self::expand(bcz, seq_len, hidden_dim, mask)?;
+        // println!("Before Mask: {:?}", x.shape());
+        // println!("Mask.shape: {:?}", expanded_mask.shape());
+        // // Mask out all values to 0 based on the original mask
+        // // and sum up around dim 1
+        // // let x = masked_fill(x, &expanded_mask, 0.)?.sum(1)?; // Shape: (B_Sz, cfg.lm_head.in_features)
+        // println!("After mask: {:?}", x.shape());
+        // // Now, we'll need to find average of each row, but to do that we'll need to figure out which of the elements in dim1 was a mask
+        // let x = x.sum(1)?;
+        // let mask = mask.sum(1)?.to_dtype(DType::F32)?;
+        // println!("{:?}", x.shape());
+
+        // // println!("{x}");
+        // // println!("{mask}");
+        
+        // x / mask
+        todo!()
+    }
 }
