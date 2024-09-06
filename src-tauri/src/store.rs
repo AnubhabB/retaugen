@@ -101,11 +101,10 @@ impl<const N: usize> ANNIndex<N> {
 
         let (b, _) = vectors.dims2()?;
 
-        for i in 0..b {
-            // let hash_key =
+        for (i, _) in ids.iter().enumerate().take(b) {
             let mut b = vec![];
             let tensor = vectors.i(i)?;
-            tensor.write_bytes(&mut b);
+            tensor.write_bytes(&mut b)?;
             if !hashes_seen.contains(&b) {
                 hashes_seen.insert(b);
                 dedup_vectors.push(tensor);
@@ -138,7 +137,7 @@ impl<const N: usize> ANNIndex<N> {
         })
     }
 
-    fn tree_result(query: &Tensor, n: i32, tree: &Node<N>, candidates: &DashSet<usize>) -> i32 {
+    fn tree_result(query: &Tensor, n: u32, tree: &Node<N>, candidates: &DashSet<usize>) -> u32 {
         // take everything in node, if still needed, take from alternate subtree
         match tree {
             Node::Leaf(box_leaf) => {
@@ -151,10 +150,7 @@ impl<const N: usize> ANNIndex<N> {
                     .for_each(|&c| {
                         candidates.insert(c);
                     });
-                // for i in 0..num_candidates_found {
-                //     candidates.insert(leaf_values[i]);
-                // }
-                num_candidates_found as i32
+                num_candidates_found as u32
             }
             Node::Inner(inner) => {
                 let above = (inner)
@@ -173,7 +169,7 @@ impl<const N: usize> ANNIndex<N> {
         }
     }
 
-    pub fn search_approximate(&self, query: &Tensor, top_k: i32) -> Vec<(i32, f32)> {
+    pub fn search_approximate(&self, query: &Tensor, top_k: u32) -> Vec<(u32, f32)> {
         let candidates = DashSet::new();
         self.trees.par_iter().for_each(|tree| {
             Self::tree_result(query, top_k, tree, &candidates);
