@@ -1,8 +1,8 @@
 use candle_core::{DType, Device, IndexOp, Tensor, D};
-use candle_nn::{linear, linear_no_bias, rms_norm, Activation, Linear, Module, RmsNorm, VarBuilder};
+use candle_nn::{
+    linear, linear_no_bias, rms_norm, Activation, Linear, Module, RmsNorm, VarBuilder,
+};
 use std::sync::Arc;
-
-use crate::utils::masked_fill;
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Config {
@@ -20,7 +20,7 @@ pub struct Config {
     pub rms_norm_eps: f64,
     pub use_sliding_window: bool,
     pub hidden_act: Activation,
-    pub lm_head: EmbedHead
+    pub lm_head: EmbedHead,
 }
 
 impl Default for Config {
@@ -42,8 +42,8 @@ impl Default for Config {
             use_sliding_window: false,
             lm_head: EmbedHead {
                 in_features: 1536,
-                out_features: 1024
-            }
+                out_features: 1024,
+            },
         }
     }
 }
@@ -51,7 +51,7 @@ impl Default for Config {
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct EmbedHead {
     pub in_features: usize,
-    pub out_features: usize
+    pub out_features: usize,
 }
 
 // Repeats a key or value tensor for grouped query attention
@@ -158,7 +158,11 @@ struct Attention {
 }
 
 impl Attention {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> candle_core::Result<Self> {
+    fn new(
+        rotary_emb: Arc<RotaryEmbedding>,
+        cfg: &Config,
+        vb: VarBuilder,
+    ) -> candle_core::Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
@@ -253,13 +257,22 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> candle_core::Result<Self> {
+    fn new(
+        rotary_emb: Arc<RotaryEmbedding>,
+        cfg: &Config,
+        vb: VarBuilder,
+    ) -> candle_core::Result<Self> {
         let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
         // let input_layernorm = RmsNorm::new(vb.pp("input_layernorm").get(s, name), cfg.rms_norm_eps);
-        let input_layernorm = rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
-        let post_attention_layernorm = rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("post_attention_layernorm"))?;
-        
+        let input_layernorm =
+            rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+        let post_attention_layernorm = rms_norm(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            vb.pp("post_attention_layernorm"),
+        )?;
+
         Ok(Self {
             self_attn,
             mlp,
@@ -396,78 +409,62 @@ pub struct Stella {
 }
 
 impl Stella {
-    pub fn new(cfg: &Config, qwen_vb: VarBuilder, head_vb: VarBuilder) -> candle_core::Result<Self> {
+    pub fn new(
+        cfg: &Config,
+        qwen_vb: VarBuilder,
+        head_vb: VarBuilder,
+    ) -> candle_core::Result<Self> {
         let base_model = Model::new(cfg, qwen_vb)?;
-        // println!("{}",head_vb.);
-        let lm_head = linear(cfg.lm_head.in_features, cfg.lm_head.out_features, head_vb.pp("linear"))?;
-        
+        let lm_head = linear(
+            cfg.lm_head.in_features,
+            cfg.lm_head.out_features,
+            head_vb.pp("linear"),
+        )?;
+
         Ok(Self {
             base_model,
             lm_head,
         })
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor, mask: &Tensor, seqlen_offset: usize) -> candle_core::Result<Tensor> {
-        let x = self.base_model.forward(input_ids, seqlen_offset, None)?;
-        // let x = masked_fill(&x, mask, 0.)?;
-        let x = self.mean_pool(&x, mask)?;
-        println!("{x}");
-        self.lm_head.forward(&x)
-    }
+    pub fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        mask: &Tensor,
+        seqlen_offset: usize,
+    ) -> candle_core::Result<Tensor> {
+        let x = self
+            .base_model
+            .forward(input_ids, seqlen_offset, None)
+            .unwrap();
+        let x = self.mean_pool(&x, mask).unwrap();
+        let x = self.lm_head.forward(&x.to_dtype(DType::F32)?)?;
 
-    fn expand(bsz: usize, seq_len: usize, hidden_dim: usize, mask: &Tensor) -> candle_core::Result<Tensor> {
-        let mut expanded = Tensor::zeros((bsz, seq_len, hidden_dim), mask.dtype(), mask.device())?;
-    
-        // Iterate over the batch and sequence dimensions
-        for b in 0..bsz {
-            for s in 0..seq_len {
-                let value = mask.get(b)?.get(s)?;
-                
-                if value.to_scalar::<u8>()? == 1 {
-                    // If the value is 1, fill the corresponding slice with ones
-                    expanded = expanded.slice_assign(
-                        &[b..b+1, s..s+1, 0..hidden_dim],
-                        &Tensor::ones((1, 1, hidden_dim), mask.dtype(), mask.device())?
-                    )?;
-                }
-            }
-        }
-
-        Ok(expanded)
+        // Normalize
+        let norm = x
+            .sqr()?
+            .sum(1)?
+            .sqrt()?
+            .unsqueeze(1)? // Shape: [1, 1]
+            .expand(x.shape())?; // Shape: [1, 1024]
+        x / norm
     }
 
     fn mean_pool(&self, x: &Tensor, mask: &Tensor) -> candle_core::Result<Tensor> {
-        println!("Before mask: {:?}", x.shape());
+        let mask = mask.to_dtype(x.dtype())?; // [B_Sz, Seq_len]
         let (batch_size, seq_len, hidden_dim) = x.dims3()?;
         // expanding the shape of the mask from [B_Sz, Seq_len] -> [B_Sz, Seq_len, Hidden_size]
-        let mask = mask.unsqueeze(2)?.expand((batch_size, seq_len, hidden_dim))?.to_dtype(DType::F32)?;
-        println!("Mask shape: {:?}", mask.shape());
-        
-        let x = (x * &mask)?;
-        println!("After mask: {:?}", x.shape());
+        let mask_expanded = mask
+            .unsqueeze(2)?
+            .expand((batch_size, seq_len, hidden_dim))?; // [B_Sz, Seq_len, Hidden_dim]
 
-        // Sum and normalize
-        let sum_mask = mask.sum(1)?.unsqueeze(1)?;
-        let query_vectors = (x.sum(1)? / sum_mask)?;
-        
-        // Each 1 in mask would become a tensor of [1 ...], 0 would become [0 ..]
-        // let (bcz, seq_len, hidden_dim) = x.dims3()?;
-        // let expanded_mask = Self::expand(bcz, seq_len, hidden_dim, mask)?;
-        // println!("Before Mask: {:?}", x.shape());
-        // println!("Mask.shape: {:?}", expanded_mask.shape());
-        // // Mask out all values to 0 based on the original mask
-        // // and sum up around dim 1
-        // // let x = masked_fill(x, &expanded_mask, 0.)?.sum(1)?; // Shape: (B_Sz, cfg.lm_head.in_features)
-        // println!("After mask: {:?}", x.shape());
-        // // Now, we'll need to find average of each row, but to do that we'll need to figure out which of the elements in dim1 was a mask
-        // let x = x.sum(1)?;
-        // let mask = mask.sum(1)?.to_dtype(DType::F32)?;
-        // println!("{:?}", x.shape());
+        let x = (x * &mask_expanded)?;
 
-        // // println!("{x}");
-        // // println!("{mask}");
-        
-        // x / mask
-        todo!()
+        // Sum
+        let sum_mask = mask
+            .sum(1)?
+            .unsqueeze(1)?
+            .expand((batch_size, hidden_dim))?;
+        x.sum(1)? / sum_mask
     }
 }
