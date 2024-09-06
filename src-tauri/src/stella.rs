@@ -414,7 +414,15 @@ impl Stella {
         qwen_vb: VarBuilder,
         head_vb: VarBuilder,
     ) -> candle_core::Result<Self> {
+        // Base model initialized which basically exposes the activations of the `last` transformer layer
+        // The last hidden layer as per `HuggingFace` standards
         let base_model = Model::new(cfg, qwen_vb)?;
+        // In auto-regressive decoders this head would be different, it would spit out the probabilities for the vocabulary on which you'll
+        // apply sampling techniquest to get the next token. We don't need that here.
+        // Instead we have a pre-trained layer (almost like a projection) which projects the last hidden layer representation to a fixed dim
+        // We are working with `1024` output dim here - thats our embedding dimension
+        // Choice of dim was governed by this model card: https://huggingface.co/dunzhang/stella_en_1.5B_v5 where the creators write:
+        // `The higher the dimension, the better the performance. Generally speaking, 1024d is good enough. The MTEB score of 1024d is only 0.001 lower than 8192d.`
         let lm_head = linear(
             cfg.lm_head.in_features,
             cfg.lm_head.out_features,
@@ -433,11 +441,11 @@ impl Stella {
         mask: &Tensor,
         seqlen_offset: usize,
     ) -> candle_core::Result<Tensor> {
-        let x = self
-            .base_model
-            .forward(input_ids, seqlen_offset, None)
-            .unwrap();
+        // Get the last hidden layer activation
+        let x = self.base_model.forward(input_ids, seqlen_offset, None)?;
+        // Apply mean pooling - aveg of activations across tokens
         let x = self.mean_pool(&x, mask).unwrap();
+        // Apply the pooled activation with our `projection` layer
         let x = self.lm_head.forward(&x.to_dtype(DType::F32)?)?;
 
         // Normalize
