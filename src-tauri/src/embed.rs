@@ -58,17 +58,32 @@ impl Embed {
 
     pub fn query(&mut self, query: &str) -> Result<Tensor> {
         let query = format!("Instruct: Given a web search query, retrieve relevant passages that answer the query.\nQuery:{query}");
-        let tokens = self.tokenize(&[&query])?;
+        let tokens = self.tokenize(&[query])?;
 
-        let ids = Tensor::from_iter(tokens[0].get_ids().to_vec(), &self.device)?.unsqueeze(0)?;
-        let mask = Tensor::from_iter(tokens[0].get_attention_mask().to_vec(), &self.device)?
-            .unsqueeze(0)?
-            .to_dtype(DType::U8)?;
+        let ids = Tensor::from_iter(
+            tokens[0]
+                .get_ids()
+                .get(0..tokens[0].get_ids().len().min(512))
+                .unwrap()
+                .to_vec(),
+            &self.device,
+        )?
+        .unsqueeze(0)?;
+        let mask = Tensor::from_iter(
+            tokens[0]
+                .get_attention_mask()
+                .get(0..tokens[0].get_attention_mask().len().min(512))
+                .unwrap()
+                .to_vec(),
+            &self.device,
+        )?
+        .unsqueeze(0)?
+        .to_dtype(DType::U8)?;
 
         Ok(self.model.forward(&ids, &mask, 0)?)
     }
 
-    pub fn embeddings(&mut self, doc_batch: &[&str]) -> Result<Tensor> {
+    pub fn embeddings(&mut self, doc_batch: &[String]) -> Result<Tensor> {
         let mut token_batch = self.tokenize(doc_batch)?;
         let mut ids = Tensor::zeros(
             (token_batch.len(), token_batch[0].get_ids().len()),
@@ -94,11 +109,11 @@ impl Embed {
         Ok(self.model.forward(&ids, &masks, 0)?)
     }
 
-    fn tokenize(&self, query: &[&str]) -> Result<Vec<Encoding>> {
+    fn tokenize(&self, query: &[String]) -> Result<Vec<Encoding>> {
         if query.len() == 1 {
             Ok(vec![self
                 .tokenizer
-                .encode(query[0], true)
+                .encode(query[0].as_str(), true)
                 .map_err(|e| anyhow!(e))?])
         } else {
             self.tokenizer
@@ -120,8 +135,8 @@ mod tests {
 
         let qry = embed.query("What are some ways to reduce stress?")?; // [1, 1024]
         let docs = embed.embeddings(&[
-            "There are many effective ways to reduce stress. Some common techniques include deep breathing, meditation, and physical activity. Engaging in hobbies, spending time in nature, and connecting with loved ones can also help alleviate stress. Additionally, setting boundaries, practicing self-care, and learning to say no can prevent stress from building up.",
-            "Green tea has been consumed for centuries and is known for its potential health benefits. It contains antioxidants that may help protect the body against damage caused by free radicals. Regular consumption of green tea has been associated with improved heart health, enhanced cognitive function, and a reduced risk of certain types of cancer. The polyphenols in green tea may also have anti-inflammatory and weight loss properties.",
+            "There are many effective ways to reduce stress. Some common techniques include deep breathing, meditation, and physical activity. Engaging in hobbies, spending time in nature, and connecting with loved ones can also help alleviate stress. Additionally, setting boundaries, practicing self-care, and learning to say no can prevent stress from building up.".to_string(),
+            "Green tea has been consumed for centuries and is known for its potential health benefits. It contains antioxidants that may help protect the body against damage caused by free radicals. Regular consumption of green tea has been associated with improved heart health, enhanced cognitive function, and a reduced risk of certain types of cancer. The polyphenols in green tea may also have anti-inflammatory and weight loss properties.".to_string(),
         ])?; // [2, 1024]
 
         // a matmul should do the trick
