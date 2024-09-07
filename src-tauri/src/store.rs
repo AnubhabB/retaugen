@@ -1,7 +1,7 @@
 // Reference for this implementation: https://fennel.ai/blog/vector-search-in-200-lines-of-rust/
 // Code: https://github.com/fennel-ai/fann
 
-use std::collections::HashSet;
+use std::{collections::HashSet, path::Path};
 
 use candle_core::{IndexOp, Tensor};
 use rand::seq::SliceRandom;
@@ -18,23 +18,23 @@ impl HyperPlane {
     }
 }
 
-enum Node<const N: usize> {
-    Inner(Box<InnerNode<N>>),
-    Leaf(Box<LeafNode<N>>),
+enum Node {
+    Inner(Box<InnerNode>),
+    Leaf(Box<LeafNode>),
 }
-struct LeafNode<const N: usize>(Vec<usize>);
-struct InnerNode<const N: usize> {
+struct LeafNode(Vec<usize>);
+struct InnerNode {
     hyperplane: HyperPlane,
-    left_node: Node<N>,
-    right_node: Node<N>,
+    left_node: Node,
+    right_node: Node,
 }
-pub struct ANNIndex<const N: usize> {
-    trees: Vec<Node<N>>,
+pub struct ANNIndex {
+    trees: Vec<Node>,
     ids: Vec<usize>,
     values: Tensor,
 }
 
-impl<const N: usize> ANNIndex<N> {
+impl ANNIndex {
     fn build_hyperplane(
         indexes: &[usize],
         all_vecs: &Tensor,
@@ -75,15 +75,15 @@ impl<const N: usize> ANNIndex<N> {
         max_size: usize,
         indexes: &[usize],
         data: &Tensor,
-    ) -> candle_core::Result<Node<N>> {
+    ) -> candle_core::Result<Node> {
         if indexes.len() <= max_size {
-            return Ok(Node::Leaf(Box::new(LeafNode::<N>(indexes.to_vec()))));
+            return Ok(Node::Leaf(Box::new(LeafNode(indexes.to_vec()))));
         }
         let (plane, above, below) = Self::build_hyperplane(indexes, data).unwrap();
         let node_above = Self::build_a_tree(max_size, &above, data).unwrap();
         let node_below = Self::build_a_tree(max_size, &below, data).unwrap();
 
-        Ok(Node::Inner(Box::new(InnerNode::<N> {
+        Ok(Node::Inner(Box::new(InnerNode {
             hyperplane: plane,
             left_node: node_below,
             right_node: node_above,
@@ -95,13 +95,13 @@ impl<const N: usize> ANNIndex<N> {
         max_size: usize,
         data: &Tensor,
         vec_ids: &[usize],
-    ) -> candle_core::Result<ANNIndex<N>> {
+    ) -> candle_core::Result<Self> {
         // Trees hold an index into the [unique_vecs] list which is not
         // necessarily its id, if duplicates existed
         let trees = (0..num_trees)
             .map(|_| Self::build_a_tree(max_size, vec_ids, data).unwrap())
             .collect::<Vec<_>>();
-        Ok(ANNIndex::<N> {
+        Ok(Self {
             trees,
             ids: vec_ids.to_owned(),
             values: data.to_owned(),
@@ -111,7 +111,7 @@ impl<const N: usize> ANNIndex<N> {
     fn tree_result(
         query: &Tensor,
         n: usize,
-        tree: &Node<N>,
+        tree: &Node,
         candidates: &mut HashSet<usize>,
     ) -> usize {
         // take everything in node, if still needed, take from alternate subtree
@@ -149,6 +149,7 @@ impl<const N: usize> ANNIndex<N> {
         &self,
         query: &Tensor,
         top_k: usize,
+        cutoff: Option<f32>
     ) -> candle_core::Result<Vec<(usize, f32)>> {
         let mut candidates = HashSet::new();
         // Find approximate matches
@@ -170,21 +171,40 @@ impl<const N: usize> ANNIndex<N> {
 
         // sort by distance
         // First create a tensor of shape top_k, 1024
+        let cutoff = cutoff.map_or(0., |c| c);
         let approx = Tensor::stack(&approx, 0).unwrap();
         let mut res = idxs
             .into_iter()
             .zip(query.matmul(&approx.t()?)?.squeeze(0)?.to_vec1::<f32>()?)
-            .map(|(idx, d)| (self.ids[idx], d))
+            .filter_map(|(idx, d)| {
+                if d >= cutoff {
+                    Some((self.ids[idx], d))
+                } else {
+                    None
+                }
+            })
             .collect::<Vec<_>>();
 
         res.par_sort_unstable_by(|a, b| {
             b.1.partial_cmp(&a.1)
                 .map_or(std::cmp::Ordering::Equal, |o| o)
         });
-        println!("{}", top_k.min(res.len()));
+        
         Ok(res[0..top_k.min(res.len())].to_vec())
     }
+
+    /// Reads a file and seeks (1024 * sizeof(f32)) to retrieve a tensor
+    /// creates the super tensor (data) and builds index
+    pub fn new_from_disk(
+        data_file: &Path,
+        num_trees: usize,
+        max_size: usize,
+    ) -> candle_core::Result<Self> {
+        todo!()
+    }
 }
+
+
 
 #[cfg(test)]
 mod tests {
@@ -230,7 +250,7 @@ mod tests {
             .unwrap();
         println!("{:?}", tensor.shape());
 
-        let store = ANNIndex::<1024>::build_index(
+        let store = ANNIndex::build_index(
             5,
             16,
             &tensor,
@@ -240,7 +260,7 @@ mod tests {
 
         println!("Indexed!!");
         let qry = embed.query("What are the latest news about Iraq?")?;
-        let res = store.search_approximate(&qry, 4)?;
+        let res = store.search_approximate(&qry, 4, Some(0.4))?;
 
         println!("Found matches: {}", res.len());
         for (idx, similarity) in res.iter() {
