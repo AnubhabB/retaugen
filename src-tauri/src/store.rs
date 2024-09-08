@@ -1,11 +1,12 @@
 // Reference for this implementation: https://fennel.ai/blog/vector-search-in-200-lines-of-rust/
 // Code: https://github.com/fennel-ai/fann
 
-use std::{collections::HashSet, path::Path};
+use std::{collections::HashSet, path::{Path, PathBuf}};
 
 use candle_core::{IndexOp, Tensor};
 use rand::seq::SliceRandom;
 use rayon::slice::ParallelSliceMut;
+use serde::{Deserialize, Serialize};
 
 struct HyperPlane {
     coefficients: Tensor,
@@ -202,6 +203,32 @@ impl ANNIndex {
     ) -> candle_core::Result<Self> {
         todo!()
     }
+}
+
+/// The store would represent data that is indexed.
+/// Upon initiation it'd read (or create) a text.data and embedding.data file
+/// In `text.data` we'll maintain
+#[derive(Serialize, Deserialize)]
+pub struct Store {
+    #[serde(skip)]
+    index: Option<ANNIndex>,
+    data: Vec<Data>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Data {
+    file: FileKind,
+    start: usize,
+    length: usize,
+    deleted: bool,
+    indexed: bool
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum FileKind {
+    Html(PathBuf),
+    Pdf(PathBuf),
+    Text(PathBuf)
 }
 
 
