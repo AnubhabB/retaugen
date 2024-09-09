@@ -1,11 +1,17 @@
 // Reference for this implementation: https://fennel.ai/blog/vector-search-in-200-lines-of-rust/
 // Code: https://github.com/fennel-ai/fann
 
-use std::{collections::HashSet, path::{Path, PathBuf}};
+use std::{
+    collections::HashSet,
+    fs::{self, OpenOptions},
+    io::{BufReader, BufWriter, Read, Seek, Write},
+    path::{Path, PathBuf},
+};
 
+use anyhow::Result;
 use candle_core::{IndexOp, Tensor};
 use rand::seq::SliceRandom;
-use rayon::slice::ParallelSliceMut;
+use rayon::{slice::ParallelSliceMut, vec};
 use serde::{Deserialize, Serialize};
 
 struct HyperPlane {
@@ -150,7 +156,7 @@ impl ANNIndex {
         &self,
         query: &Tensor,
         top_k: usize,
-        cutoff: Option<f32>
+        cutoff: Option<f32>,
     ) -> candle_core::Result<Vec<(usize, f32)>> {
         let mut candidates = HashSet::new();
         // Find approximate matches
@@ -190,7 +196,7 @@ impl ANNIndex {
             b.1.partial_cmp(&a.1)
                 .map_or(std::cmp::Ordering::Equal, |o| o)
         });
-        
+
         Ok(res[0..top_k.min(res.len())].to_vec())
     }
 
@@ -206,13 +212,19 @@ impl ANNIndex {
 }
 
 /// The store would represent data that is indexed.
-/// Upon initiation it'd read (or create) a text.data and embedding.data file
-/// In `text.data` we'll maintain
+/// Upon initiation it'd read (or create) a .store, text.data, embed.data file
+/// In `text.data` file we'll maintain bytes of text split into embedding chunks. The start index byte, the length of the chunk and some more metadata will be maintained
+/// in `struct Data`
+/// In `embedding.data` file we'll maintain byte representations of the tensor, one per each segment.
+/// `.store` file will maintain a bincode serialized representation of the `struct Store`
 #[derive(Serialize, Deserialize)]
 pub struct Store {
     #[serde(skip)]
     index: Option<ANNIndex>,
     data: Vec<Data>,
+    dir: PathBuf,
+    text_end: usize,
+    embed_end: usize,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -221,25 +233,106 @@ pub struct Data {
     start: usize,
     length: usize,
     deleted: bool,
-    indexed: bool
+    indexed: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub enum FileKind {
     Html(PathBuf),
     Pdf(PathBuf),
-    Text(PathBuf)
+    Text(PathBuf),
 }
 
+const EMBED_FILE: &str = "embed.data";
+const TEXT_FILE: &str = "text.data";
+const STORE_FILE: &str = ".store";
 
+impl Store {
+    pub fn load_from_file(dir: &Path) -> Result<Self> {
+        println!("{:?} {}", dir, dir.is_dir());
+        let store = if dir.join(STORE_FILE).is_file() {
+            let mut store = fs::File::open(STORE_FILE).unwrap();
+            let mut buf = vec![];
+            store.read_to_end(&mut buf).unwrap();
+
+            let mut store = bincode::deserialize::<Store>(&buf).unwrap();
+            // TODO: build ANN here
+
+            store
+        } else {
+            fs::File::create_new(dir.join(STORE_FILE))?;
+            fs::File::create_new(dir.join(EMBED_FILE))?;
+            fs::File::create_new(dir.join(TEXT_FILE))?;
+
+            let store = Self {
+                index: None,
+                data: vec![],
+                dir: dir.into(),
+                text_end: 0,
+                embed_end: 0,
+            };
+
+            store.save()?;
+
+            store
+        };
+
+        Ok(store)
+    }
+
+    pub fn insert(&mut self, data: &[(String, Tensor, FileKind)]) -> Result<()> {
+        let mut text = OpenOptions::new()
+            .append(true)
+            .open(self.dir.join(TEXT_FILE))?;
+
+        let mut embed = OpenOptions::new()
+            .append(true)
+            .open(self.dir.join(EMBED_FILE))?;
+
+        for (txt, tensor, file) in data.iter() {
+            let txtbytes = txt.as_bytes();
+            text.write_all(txtbytes).unwrap();
+            let data = Data {
+                file: file.clone(),
+                start: self.text_end,
+                length: txtbytes.len(),
+                deleted: false,
+                indexed: false,
+            };
+            self.text_end += txtbytes.len();
+            let mut tensorbytes = vec![];
+            tensor.write_bytes(&mut tensorbytes).unwrap();
+            embed.write_all(&tensorbytes[..]).unwrap();
+
+            self.embed_end += tensorbytes.len();
+
+            self.data.push(data);
+        }
+
+        self.save()?;
+
+        Ok(())
+    }
+
+    pub fn save(&self) -> Result<()> {
+        let storebytes = bincode::serialize(&self)?;
+        std::fs::write(self.dir.join(STORE_FILE), &storebytes)?;
+
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
     use anyhow::Result;
-    use candle_core::Tensor;
+    use candle_core::{IndexOp, Tensor};
     use serde::Deserialize;
 
     use crate::{embed::Embed, store::ANNIndex};
+
+    use super::{FileKind, Store};
 
     const CHUNK: usize = 4;
     const NUM_CHUNKS: usize = 16;
@@ -251,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn store_and_fetch() -> Result<()> {
+    fn index_and_fetch() -> Result<()> {
         let data = std::fs::read_to_string("../test-data/wiki-smoll.json").unwrap();
         let data = serde_json::from_str::<Vec<WikiNews>>(&data)
             .unwrap()
@@ -293,6 +386,48 @@ mod tests {
         for (idx, similarity) in res.iter() {
             println!("---------------\n{}\n[{idx} {}]", data[*idx], similarity);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn storage() -> Result<()> {
+        let mut store = Store::load_from_file(Path::new("../test-data")).unwrap();
+
+        let data = {
+            let data = std::fs::read_to_string("../test-data/wiki-smoll.json")?;
+            serde_json::from_str::<Vec<WikiNews>>(&data)?
+        };
+
+        let mut embed = Embed::new()?;
+
+        let chunks = data.chunks(CHUNK).take(NUM_CHUNKS);
+
+        for c in chunks {
+            let c = c
+                .iter()
+                .map(|t| format!("## {}\n{}", t.title, t.text))
+                .collect::<Vec<_>>();
+            let tensor = if let Ok(e) = embed.embeddings(&c) {
+                e
+            } else {
+                continue;
+            };
+
+            let tosave = c
+                .iter()
+                .enumerate()
+                .map(|(i, t)| {
+                    (
+                        t.to_string(),
+                        tensor.i(i).unwrap(),
+                        FileKind::Text(Path::new("../test-data/wiki-smoll.json").to_path_buf()),
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            store.insert(&tosave[..])?;
+        }
+
         Ok(())
     }
 }

@@ -16,6 +16,7 @@ tauri-build = { version = "2.0.0-rc", features = [] }
 
 [dependencies]
 anyhow             = "1"
+bincode            = "1"
 candle-core        = { git = "https://github.com/huggingface/candle.git", version = "0.6.1", features = ["metal"] }
 candle-nn          = { git = "https://github.com/huggingface/candle.git", version = "0.6.1", features = ["metal"] }
 rand               = "0"
