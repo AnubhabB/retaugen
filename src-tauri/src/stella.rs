@@ -4,6 +4,8 @@ use candle_nn::{
 };
 use std::sync::Arc;
 
+pub const STELLA_MAX_BATCH: usize = 4;
+
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Config {
     pub vocab_size: usize,
