@@ -197,7 +197,7 @@ impl Store {
         }
 
         let tensors = Tensor::stack(&tensors[..], 0).unwrap();
-        let ann = ANNIndex::build_index(7, 16, &tensors, &ids).unwrap();
+        let ann = ANNIndex::build_index(32, 32, &tensors, &ids).unwrap();
         self.index = Some(ann);
         Ok(())
     }
@@ -237,7 +237,7 @@ mod tests {
         println!("Begin insert!");
         let (mut text_file, mut embed_file) = store.files()?;
         
-        for (i, c) in chunks.enumerate().skip(69).take(16) {
+        for (i, c) in chunks.enumerate().skip(85).take(128) {
             let c = c
                 .iter()
                 .map(|t| format!("## {}\n{}", t.title, t.text))
@@ -267,7 +267,7 @@ mod tests {
             println!("Store insert @{i}: {}ms", (Instant::now() - s).as_millis());
         }
 
-        println!("Preparing to test ..");
+        println!("Preparing to test ..{}", store.data.len());
 
         // Ok, now let's test we have saved it right or not
         for (i, d) in store.data.iter().enumerate() {
@@ -288,9 +288,9 @@ mod tests {
         let store = Store::load_from_file(Path::new("../test-data")).unwrap();
         
         let mut embed = Embed::new().unwrap();
-        let qry = embed.query("What are the latest news about Iraq?").unwrap().to_device(&candle_core::Device::Cpu).unwrap();
+        let qry = embed.query("What are some latest news about Iraq?").unwrap().to_device(&candle_core::Device::Cpu).unwrap();
 
-        let res = store.search(&qry, 4, Some(40.)).unwrap();
+        let res = store.search(&qry, 4, None).unwrap();
         println!("{:?}", res);
         Ok(())
     }
