@@ -4,7 +4,10 @@
 use candle_core::{IndexOp, Tensor};
 use dashmap::DashSet;
 use rand::seq::SliceRandom;
-use rayon::{iter::{IntoParallelRefIterator, ParallelIterator}, slice::ParallelSliceMut};
+use rayon::{
+    iter::{IntoParallelRefIterator, ParallelIterator},
+    slice::ParallelSliceMut,
+};
 
 struct HyperPlane {
     coefficients: Tensor,
@@ -107,12 +110,7 @@ impl ANNIndex {
         })
     }
 
-    fn tree_result(
-        query: &Tensor,
-        n: usize,
-        tree: &Node,
-        candidates: &DashSet<usize>,
-    ) -> usize {
+    fn tree_result(query: &Tensor, n: usize, tree: &Node, candidates: &DashSet<usize>) -> usize {
         // take everything in node, if still needed, take from alternate subtree
         match tree {
             Node::Leaf(box_leaf) => {
@@ -200,7 +198,6 @@ mod tests {
     use serde::Deserialize;
 
     use crate::{ann::ANNIndex, embed::Embed, stella::STELLA_MAX_BATCH};
-
 
     #[derive(Deserialize)]
     struct WikiNews {

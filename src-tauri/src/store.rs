@@ -1,7 +1,8 @@
 use std::{
     fs::{self, File, OpenOptions},
     io::{BufReader, Read, Seek, Write},
-    path::{Path, PathBuf}, sync::{Arc, Mutex},
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 use anyhow::{anyhow, Result};
@@ -57,17 +58,11 @@ impl Store {
             store.read_to_end(&mut buf).unwrap();
 
             let mut store = bincode::deserialize::<Store>(&buf).unwrap();
-            
+
             store.build_index().unwrap();
-            store.data_file = Some(
-                Arc::new(
-                    Mutex::new(
-                        BufReader::new(
-                            File::open(dir.join(TEXT_FILE)).unwrap()
-                        )
-                    )
-                )
-            );
+            store.data_file = Some(Arc::new(Mutex::new(BufReader::new(
+                File::open(dir.join(TEXT_FILE)).unwrap(),
+            ))));
 
             store
         } else {
@@ -75,7 +70,10 @@ impl Store {
             fs::File::create_new(dir.join(EMBED_FILE)).unwrap();
             fs::File::create_new(dir.join(TEXT_FILE)).unwrap();
 
-            let store = Self { dir: dir.to_path_buf(), ..Default::default() };
+            let store = Self {
+                dir: dir.to_path_buf(),
+                ..Default::default()
+            };
 
             store.save().unwrap();
 
@@ -85,7 +83,12 @@ impl Store {
         Ok(store)
     }
 
-    pub fn insert(&mut self,text_file: &mut File, embed_file: &mut File, data: &[(String, Tensor, FileKind)]) -> Result<()> {
+    pub fn insert(
+        &mut self,
+        text_file: &mut File,
+        embed_file: &mut File,
+        data: &[(String, Tensor, FileKind)],
+    ) -> Result<()> {
         let mut txt_data = vec![];
         let mut embed_data = vec![];
 
@@ -128,14 +131,21 @@ impl Store {
         Ok(())
     }
 
-    pub fn search(&self, qry: &Tensor, top_k: usize, cutoff: Option<f32>) -> Result<Vec<(&Data, String, f32)>> {
+    pub fn search(
+        &self,
+        qry: &Tensor,
+        top_k: usize,
+        cutoff: Option<f32>,
+    ) -> Result<Vec<(&Data, String, f32)>> {
         let index = if let Some(idx) = &self.index {
             idx
         } else {
-            return Err(anyhow!("ANN Index not ready!"))
+            return Err(anyhow!("ANN Index not ready!"));
         };
 
-        let res = index.search_approximate(qry, top_k, cutoff).unwrap()
+        let res = index
+            .search_approximate(qry, top_k, cutoff)
+            .unwrap()
             .iter()
             .filter_map(|(idx, score)| {
                 if let Some(d) = self.data.get(*idx) {
@@ -146,11 +156,7 @@ impl Store {
                                 let mut txt = vec![0_u8; d.length];
                                 l.read_exact(&mut txt).unwrap();
 
-                                Some((
-                                    d,
-                                    String::from_utf8(txt).unwrap(),
-                                    *score
-                                ))
+                                Some((d, String::from_utf8(txt).unwrap(), *score))
                             }
                             Err(e) => {
                                 println!("Error acquiring lock!: {e:?}");
@@ -172,11 +178,13 @@ impl Store {
     pub fn files(&self) -> Result<(File, File)> {
         let text = OpenOptions::new()
             .append(true)
-            .open(self.dir.join(TEXT_FILE)).unwrap();
+            .open(self.dir.join(TEXT_FILE))
+            .unwrap();
 
         let embed = OpenOptions::new()
             .append(true)
-            .open(self.dir.join(EMBED_FILE)).unwrap();
+            .open(self.dir.join(EMBED_FILE))
+            .unwrap();
 
         Ok((text, embed))
     }
@@ -190,7 +198,13 @@ impl Store {
             let mut buffer = [0_u8; 4096];
             reader.read_exact(&mut buffer).unwrap();
 
-            let tensor = Tensor::from_raw_buffer(&buffer, candle_core::DType::F32, &[1024], &candle_core::Device::Cpu).unwrap();
+            let tensor = Tensor::from_raw_buffer(
+                &buffer,
+                candle_core::DType::F32,
+                &[1024],
+                &candle_core::Device::Cpu,
+            )
+            .unwrap();
 
             ids.push(i);
             tensors.push(tensor);
@@ -205,7 +219,11 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use std::{io::{Read, Seek}, path::Path, time::Instant};
+    use std::{
+        io::{Read, Seek},
+        path::Path,
+        time::Instant,
+    };
 
     use anyhow::Result;
     use candle_core::IndexOp;
@@ -236,7 +254,7 @@ mod tests {
 
         println!("Begin insert!");
         let (mut text_file, mut embed_file) = store.files()?;
-        
+
         for (i, c) in chunks.enumerate().skip(85).take(128) {
             let c = c
                 .iter()
@@ -249,7 +267,10 @@ mod tests {
             } else {
                 continue;
             };
-            println!("Embedding generation @{i}: {}ms", (Instant::now() - s).as_millis());
+            println!(
+                "Embedding generation @{i}: {}ms",
+                (Instant::now() - s).as_millis()
+            );
 
             let tosave = c
                 .iter()
@@ -263,7 +284,9 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             let s = Instant::now();
-            store.insert(&mut text_file, &mut embed_file,&tosave[..]).unwrap();
+            store
+                .insert(&mut text_file, &mut embed_file, &tosave[..])
+                .unwrap();
             println!("Store insert @{i}: {}ms", (Instant::now() - s).as_millis());
         }
 
@@ -286,9 +309,13 @@ mod tests {
     #[test]
     fn storage_read() -> Result<()> {
         let store = Store::load_from_file(Path::new("../test-data")).unwrap();
-        
+
         let mut embed = Embed::new().unwrap();
-        let qry = embed.query("What are some latest news about Iraq?").unwrap().to_device(&candle_core::Device::Cpu).unwrap();
+        let qry = embed
+            .query("What are some latest news about Iraq?")
+            .unwrap()
+            .to_device(&candle_core::Device::Cpu)
+            .unwrap();
 
         let res = store.search(&qry, 4, None).unwrap();
         println!("{:?}", res);
