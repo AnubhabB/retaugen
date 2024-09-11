@@ -2,14 +2,19 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{BufReader, Read, Seek, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex}
 };
 
 use anyhow::{anyhow, Result};
-use candle_core::Tensor;
+use candle_core::{safetensors, Tensor};
 use serde::{Deserialize, Serialize};
 
 use crate::ann::ANNIndex;
+
+const EMBED_FILE: &str = "embed.data";
+const TEXT_FILE: &str = "text.data";
+const STORE_FILE: &str = ".store";
+const EMBED_TENSOR_NAME: &str = "embed";
 
 /// The store would represent data that is indexed.
 /// Upon initiation it'd read (or create) a .store, text.data, embed.data file
@@ -21,8 +26,7 @@ use crate::ann::ANNIndex;
 pub struct Store {
     data: Vec<Data>,
     dir: PathBuf,
-    text_end: usize,
-    embed_end: usize,
+    text_size: usize,
     #[serde(skip)]
     data_file: Option<Arc<Mutex<BufReader<File>>>>,
     #[serde(skip)]
@@ -45,10 +49,6 @@ pub enum FileKind {
     Text(PathBuf),
 }
 
-const EMBED_FILE: &str = "embed.data";
-const TEXT_FILE: &str = "text.data";
-const STORE_FILE: &str = ".store";
-
 impl Store {
     pub fn load_from_file(dir: &Path) -> Result<Self> {
         let storefile = dir.join(STORE_FILE);
@@ -70,10 +70,14 @@ impl Store {
             fs::File::create_new(dir.join(EMBED_FILE)).unwrap();
             fs::File::create_new(dir.join(TEXT_FILE)).unwrap();
 
-            let store = Self {
+            let mut store = Self {
                 dir: dir.to_path_buf(),
                 ..Default::default()
             };
+
+            store.data_file = Some(Arc::new(Mutex::new(BufReader::new(
+                File::open(dir.join(TEXT_FILE)).unwrap(),
+            ))));
 
             store.save().unwrap();
 
@@ -87,39 +91,33 @@ impl Store {
         &mut self,
         text_file: &mut File,
         embed_file: &mut File,
-        data: &[(String, Tensor, FileKind)],
+        data: &mut impl Iterator<Item = (String, Tensor, FileKind)>,
     ) -> Result<()> {
-        let mut txt_data = vec![];
-        let mut embed_data = vec![];
+        // Initialize with a large size to avoid frequent re-allocation
+        let mut txt_data = Vec::with_capacity(4096);
+        let mut tensors = Vec::with_capacity(64);
 
-        for (txt, tensor, file) in data.iter() {
-            let mut txtbytes = txt.as_bytes().to_vec();
-            // text_file.write_all(txtbytes).unwrap();
+        while let Some((txt, tensor, file)) = data.by_ref().next() {
+            let txt = txt.as_bytes();
             let data = Data {
-                file: file.clone(),
-                start: self.text_end,
-                length: txtbytes.len(),
+                file,
+                start: self.text_size,
+                length: txt.len(),
                 deleted: false,
-                indexed: false,
+                indexed: true,
             };
-            self.text_end += txtbytes.len();
-            let mut tensorbytes = vec![];
-            tensor.write_bytes(&mut tensorbytes).unwrap();
-
-            self.embed_end += tensorbytes.len();
-
+            tensors.push(tensor);
+            txt_data = [&txt_data, txt].concat();
             self.data.push(data);
-
-            txt_data.append(&mut txtbytes);
-            embed_data.append(&mut tensorbytes);
+            self.text_size += txt.len();
         }
 
-        self.save().unwrap();
-        embed_file.write_all(&embed_data)?;
+        Tensor::stack(&tensors, 0)?
+            .save_safetensors(EMBED_TENSOR_NAME, self.dir.join(EMBED_FILE))?;
         text_file.write_all(&txt_data)?;
+        text_file.sync_all()?;
 
-        embed_file.sync_all().unwrap();
-        text_file.sync_all().unwrap();
+        self.save()?;
 
         Ok(())
     }
@@ -190,28 +188,12 @@ impl Store {
     }
 
     fn build_index(&mut self) -> Result<()> {
-        let mut reader = fs::File::open(self.dir.join(EMBED_FILE)).unwrap();
-        let mut ids = vec![];
-        let mut tensors = vec![];
+        let tensors = unsafe {
+            safetensors::MmapedSafetensors::new(self.dir.join(EMBED_FILE))?
+            .load(EMBED_TENSOR_NAME, &candle_core::Device::Cpu)?
+        };
 
-        for (i, _) in self.data.iter().enumerate() {
-            let mut buffer = [0_u8; 4096];
-            reader.read_exact(&mut buffer).unwrap();
-
-            let tensor = Tensor::from_raw_buffer(
-                &buffer,
-                candle_core::DType::F32,
-                &[1024],
-                &candle_core::Device::Cpu,
-            )
-            .unwrap();
-
-            ids.push(i);
-            tensors.push(tensor);
-        }
-
-        let tensors = Tensor::stack(&tensors[..], 0).unwrap();
-        let ann = ANNIndex::build_index(32, 32, &tensors, &ids).unwrap();
+        let ann = ANNIndex::build_index(32, 32, &tensors, &(0..self.data.len()).collect::<Vec<_>>()).unwrap();
         self.index = Some(ann);
         Ok(())
     }
@@ -221,12 +203,12 @@ impl Store {
 mod tests {
     use std::{
         io::{Read, Seek},
-        path::Path,
-        time::Instant,
+        path::Path
     };
 
     use anyhow::Result;
     use candle_core::IndexOp;
+    use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
     use serde::Deserialize;
 
     use crate::{embed::Embed, stella::STELLA_MAX_BATCH};
@@ -241,55 +223,41 @@ mod tests {
 
     #[test]
     fn storage_init() -> Result<()> {
-        let mut store = Store::load_from_file(Path::new("../test-data")).unwrap();
-
         let data = {
             let data = std::fs::read_to_string("../test-data/wiki-smoll.json").unwrap();
             serde_json::from_str::<Vec<WikiNews>>(&data).unwrap()
         };
-
+        
+        let mut store = Store::load_from_file(Path::new("../test-data")).unwrap();
         let mut embed = Embed::new().unwrap();
 
-        let chunks = data.chunks(STELLA_MAX_BATCH);
-
-        println!("Begin insert!");
-        let (mut text_file, mut embed_file) = store.files()?;
-
-        for (i, c) in chunks.enumerate().skip(85).take(128) {
-            let c = c
-                .iter()
+        let mut chunks = data.chunks(STELLA_MAX_BATCH).take(128).filter_map(|c| {
+            let batch = c.par_iter()
                 .map(|t| format!("## {}\n{}", t.title, t.text))
                 .collect::<Vec<_>>();
 
-            let s = Instant::now();
-            let tensor = if let Ok(e) = embed.embeddings(&c) {
-                e
+            if let Ok(e) = embed.embeddings(&batch) {
+                let data = batch
+                    .par_iter()
+                    .enumerate()
+                    .map(|(i, t)| {
+                        (
+                            t.to_string(),
+                            e.i(i).unwrap(),
+                            FileKind::Text(Path::new("../test-data/wiki-smoll.json").to_path_buf()),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+
+                Some(data)
             } else {
-                continue;
-            };
-            println!(
-                "Embedding generation @{i}: {}ms",
-                (Instant::now() - s).as_millis()
-            );
+                None
+            }
+        }).flatten();
 
-            let tosave = c
-                .iter()
-                .enumerate()
-                .map(|(i, t)| {
-                    (
-                        t.to_string(),
-                        tensor.i(i).unwrap(),
-                        FileKind::Text(Path::new("../test-data/wiki-smoll.json").to_path_buf()),
-                    )
-                })
-                .collect::<Vec<_>>();
-            let s = Instant::now();
-            store
-                .insert(&mut text_file, &mut embed_file, &tosave[..])
-                .unwrap();
-            println!("Store insert @{i}: {}ms", (Instant::now() - s).as_millis());
-        }
-
+        println!("Begin insert!");
+        let (mut text_file, mut embed_file) = store.files()?;
+        store.insert(&mut text_file, &mut embed_file, &mut chunks)?;
         println!("Preparing to test ..{}", store.data.len());
 
         // Ok, now let's test we have saved it right or not
@@ -299,7 +267,6 @@ mod tests {
             df.seek(std::io::SeekFrom::Start(d.start as u64)).unwrap();
             df.read_exact(&mut buf).unwrap();
             let str = std::str::from_utf8(&buf).unwrap();
-            // println!("{str} ## {}\n{}", data[i].title, data[i].text);
             assert_eq!(str, format!("## {}\n{}", data[i].title, data[i].text));
         }
 
