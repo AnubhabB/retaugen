@@ -24,12 +24,15 @@ enum Node {
     Inner(Box<InnerNode>),
     Leaf(Box<LeafNode>),
 }
+
 struct LeafNode(Vec<usize>);
+
 struct InnerNode {
     hyperplane: HyperPlane,
     left_node: Node,
     right_node: Node,
 }
+
 pub struct ANNIndex {
     trees: Vec<Node>,
     ids: Vec<usize>,
@@ -41,15 +44,19 @@ impl ANNIndex {
         indexes: &[usize],
         all_vecs: &Tensor,
     ) -> candle_core::Result<(HyperPlane, Vec<usize>, Vec<usize>)> {
+        // Choosing random indices
         let sample = indexes
             .choose_multiple(&mut rand::thread_rng(), 2)
             .collect::<Vec<_>>();
         // cartesian eq for hyperplane n * (x - x_0) = 0
         // n (normal vector) is the coefs x_1 to x_n
         let (a, b) = (*sample[0], *sample[1]);
+
+        // Calculate the midpoint
         let coefficients = (all_vecs.i(b) - &all_vecs.i(a)?)?;
         let point_on_plane = ((all_vecs.i(b)? + &all_vecs.i(a)?)? / 2.)?;
 
+        // And build the hyperplane
         let constant = coefficients
             .mul(&point_on_plane)?
             .sum(0)?
@@ -59,10 +66,12 @@ impl ANNIndex {
             coefficients,
             constant,
         };
+
+        // Classify the vectors as being above or below
         let (mut above, mut below) = (vec![], vec![]);
         for &id in indexes.iter() {
             if hyperplane
-                .point_is_above(&all_vecs.i(id).unwrap())
+                .point_is_above(&all_vecs.i(id)?)
                 .map_or(false, |d| d)
             {
                 above.push(id)
@@ -78,36 +87,21 @@ impl ANNIndex {
         indexes: &[usize],
         data: &Tensor,
     ) -> candle_core::Result<Node> {
+        // If the number of elements in a tree has reached the configurable `max size of node` then move on
         if indexes.len() <= max_size {
             return Ok(Node::Leaf(Box::new(LeafNode(indexes.to_vec()))));
         }
-        let (plane, above, below) = Self::build_hyperplane(indexes, data).unwrap();
-        let node_above = Self::build_a_tree(max_size, &above, data).unwrap();
-        let node_below = Self::build_a_tree(max_size, &below, data).unwrap();
+
+        // Recursively keep constructing the tree
+        let (plane, above, below) = Self::build_hyperplane(indexes, data)?;
+        let node_above = Self::build_a_tree(max_size, &above, data)?;
+        let node_below = Self::build_a_tree(max_size, &below, data)?;
 
         Ok(Node::Inner(Box::new(InnerNode {
             hyperplane: plane,
             left_node: node_below,
             right_node: node_above,
         })))
-    }
-
-    pub fn build_index(
-        num_trees: usize,
-        max_size: usize,
-        data: &Tensor,
-        vec_ids: &[usize],
-    ) -> candle_core::Result<Self> {
-        // Trees hold an index into the [unique_vecs] list which is not
-        // necessarily its id, if duplicates existed
-        let trees = (0..num_trees)
-            .map(|_| Self::build_a_tree(max_size, vec_ids, data).unwrap())
-            .collect::<Vec<_>>();
-        Ok(Self {
-            trees,
-            ids: vec_ids.to_owned(),
-            values: data.to_owned(),
-        })
     }
 
     fn tree_result(query: &Tensor, n: usize, tree: &Node, candidates: &DashSet<usize>) -> usize {
@@ -142,6 +136,26 @@ impl ANNIndex {
         }
     }
 
+    /// API for building the index
+    pub fn build_index(
+        num_trees: usize,
+        max_size: usize,
+        data: &Tensor,
+        vec_ids: &[usize],
+    ) -> candle_core::Result<Self> {
+        // Trees hold an index into the [unique_vecs] list which is not
+        // necessarily its id, if duplicates existed
+        let trees = (0..num_trees)
+            .map(|_| Self::build_a_tree(max_size, vec_ids, data).unwrap())
+            .collect::<Vec<_>>();
+        Ok(Self {
+            trees,
+            ids: vec_ids.to_owned(),
+            values: data.to_owned(),
+        })
+    }
+
+    /// API for search
     pub fn search_approximate(
         &self,
         query: &Tensor,
@@ -169,7 +183,7 @@ impl ANNIndex {
         // sort by distance
         // First create a tensor of shape top_k, 1024
         let cutoff = cutoff.map_or(0., |c| c);
-        let approx = Tensor::stack(&approx, 0).unwrap();
+        let approx = Tensor::stack(&approx, 0)?;
         let mut res = idxs
             .into_iter()
             .zip(query.matmul(&approx.t()?)?.squeeze(0)?.to_vec1::<f32>()?)
@@ -209,14 +223,13 @@ mod tests {
 
     #[test]
     fn index_and_fetch() -> Result<()> {
-        let data = std::fs::read_to_string("../test-data/wiki-smoll.json").unwrap();
-        let data = serde_json::from_str::<Vec<WikiNews>>(&data)
-            .unwrap()
+        let data = std::fs::read_to_string("../test-data/wiki-smoll.json")?;
+        let data = serde_json::from_str::<Vec<WikiNews>>(&data)?
             .iter()
             .map(|d| format!("## {}\n{}", d.title, d.text))
             .collect::<Vec<_>>();
 
-        let mut embed = Embed::new().unwrap();
+        let mut embed = Embed::new()?;
 
         let chunks = data.chunks(STELLA_MAX_BATCH).take(NUM_CHUNKS);
         let mut all_tensors = vec![];
@@ -229,9 +242,9 @@ mod tests {
         }
 
         let tensor = Tensor::stack(&all_tensors, 0)
-            .unwrap()
+            ?
             .reshape((STELLA_MAX_BATCH * NUM_CHUNKS, 1024))
-            .unwrap();
+            ?;
 
         let store = ANNIndex::build_index(
             5,
@@ -239,7 +252,7 @@ mod tests {
             &tensor,
             &(0..STELLA_MAX_BATCH * NUM_CHUNKS).collect::<Vec<_>>()[..],
         )
-        .unwrap();
+        ?;
 
         println!("Indexed!!");
         let qry = embed.query("What are the latest news about Iraq?")?;
