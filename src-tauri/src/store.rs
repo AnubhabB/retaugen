@@ -19,8 +19,7 @@ const EMBED_TENSOR_NAME: &str = "embed";
 /// The store would represent data that is indexed.
 /// Upon initiation it'd read (or create) a .store, text.data, embed.data file
 /// In `text.data` file we'll maintain bytes of text split into embedding chunks. The start index byte, the length of the chunk and some more metadata will be maintained
-/// in `struct Data`
-/// In `embedding.data` file we'll maintain byte representations of the tensor, one per each segment.
+/// In `embed.data` file we'll maintain byte representations of the tensor, one per each segment.
 /// `.store` file will maintain a bincode serialized representation of the `struct Store`
 #[derive(Serialize, Deserialize, Default)]
 pub struct Store {
@@ -33,6 +32,7 @@ pub struct Store {
     index: Option<ANNIndex>,
 }
 
+/// in `struct Data` we maintain the source file of the data and along with it the chunk of text being indexed
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Data {
     file: FileKind,
@@ -50,25 +50,26 @@ pub enum FileKind {
 }
 
 impl Store {
+    /// Loads data and initializes indexes if files are present in the given directory or creates them
     pub fn load_from_file(dir: &Path) -> Result<Self> {
         let storefile = dir.join(STORE_FILE);
         let store = if storefile.is_file() {
-            let mut store = fs::File::open(storefile).unwrap();
+            let mut store = fs::File::open(storefile)?;
             let mut buf = vec![];
-            store.read_to_end(&mut buf).unwrap();
+            store.read_to_end(&mut buf)?;
 
-            let mut store = bincode::deserialize::<Store>(&buf).unwrap();
+            let mut store = bincode::deserialize::<Store>(&buf)?;
 
-            store.build_index().unwrap();
+            store.build_index()?;
             store.data_file = Some(Arc::new(Mutex::new(BufReader::new(
-                File::open(dir.join(TEXT_FILE)).unwrap(),
+                File::open(dir.join(TEXT_FILE))?,
             ))));
 
             store
         } else {
-            fs::File::create_new(storefile).unwrap();
-            fs::File::create_new(dir.join(EMBED_FILE)).unwrap();
-            fs::File::create_new(dir.join(TEXT_FILE)).unwrap();
+            fs::File::create_new(storefile)?;
+            fs::File::create_new(dir.join(EMBED_FILE))?;
+            fs::File::create_new(dir.join(TEXT_FILE))?;
 
             let mut store = Self {
                 dir: dir.to_path_buf(),
@@ -76,10 +77,10 @@ impl Store {
             };
 
             store.data_file = Some(Arc::new(Mutex::new(BufReader::new(
-                File::open(dir.join(TEXT_FILE)).unwrap(),
+                File::open(dir.join(TEXT_FILE))?,
             ))));
 
-            store.save().unwrap();
+            store.save()?;
 
             store
         };
@@ -87,10 +88,10 @@ impl Store {
         Ok(store)
     }
 
+    /// Accepts an iterator of (text, embeddings of text, FileKind) and adds it to the indexed list
     pub fn insert(
         &mut self,
         text_file: &mut File,
-        embed_file: &mut File,
         data: &mut impl Iterator<Item = (String, Tensor, FileKind)>,
     ) -> Result<()> {
         // Initialize with a large size to avoid frequent re-allocation
@@ -122,13 +123,15 @@ impl Store {
         Ok(())
     }
 
+    /// Serializes and saves the core struct
     pub fn save(&self) -> Result<()> {
-        let storebytes = bincode::serialize(&self).unwrap();
-        std::fs::write(self.dir.join(STORE_FILE), &storebytes).unwrap();
+        let storebytes = bincode::serialize(&self)?;
+        std::fs::write(self.dir.join(STORE_FILE), &storebytes)?;
 
         Ok(())
     }
 
+    /// API for search into the index
     pub fn search(
         &self,
         qry: &Tensor,
@@ -143,7 +146,7 @@ impl Store {
 
         let res = index
             .search_approximate(qry, top_k, cutoff)
-            .unwrap()
+            ?
             .iter()
             .filter_map(|(idx, score)| {
                 if let Some(d) = self.data.get(*idx) {
@@ -173,16 +176,17 @@ impl Store {
         Ok(res)
     }
 
+    /// Returns the files associated with this store
     pub fn files(&self) -> Result<(File, File)> {
         let text = OpenOptions::new()
             .append(true)
             .open(self.dir.join(TEXT_FILE))
-            .unwrap();
+            ?;
 
         let embed = OpenOptions::new()
             .append(true)
             .open(self.dir.join(EMBED_FILE))
-            .unwrap();
+            ?;
 
         Ok((text, embed))
     }
@@ -193,7 +197,7 @@ impl Store {
             .load(EMBED_TENSOR_NAME, &candle_core::Device::Cpu)?
         };
 
-        let ann = ANNIndex::build_index(32, 32, &tensors, &(0..self.data.len()).collect::<Vec<_>>()).unwrap();
+        let ann = ANNIndex::build_index(32, 32, &tensors, &(0..self.data.len()).collect::<Vec<_>>())?;
         self.index = Some(ann);
         Ok(())
     }
@@ -224,12 +228,12 @@ mod tests {
     #[test]
     fn storage_init() -> Result<()> {
         let data = {
-            let data = std::fs::read_to_string("../test-data/wiki-smoll.json").unwrap();
-            serde_json::from_str::<Vec<WikiNews>>(&data).unwrap()
+            let data = std::fs::read_to_string("../test-data/wiki-smoll.json")?;
+            serde_json::from_str::<Vec<WikiNews>>(&data)?
         };
         
-        let mut store = Store::load_from_file(Path::new("../test-data")).unwrap();
-        let mut embed = Embed::new().unwrap();
+        let mut store = Store::load_from_file(Path::new("../test-data"))?;
+        let mut embed = Embed::new()?;
 
         let mut chunks = data.chunks(STELLA_MAX_BATCH).take(128).filter_map(|c| {
             let batch = c.par_iter()
@@ -256,17 +260,17 @@ mod tests {
         }).flatten();
 
         println!("Begin insert!");
-        let (mut text_file, mut embed_file) = store.files()?;
-        store.insert(&mut text_file, &mut embed_file, &mut chunks)?;
+        let (mut text_file, _) = store.files()?;
+        store.insert(&mut text_file, &mut chunks)?;
         println!("Preparing to test ..{}", store.data.len());
 
         // Ok, now let's test we have saved it right or not
         for (i, d) in store.data.iter().enumerate() {
             let mut df = store.data_file.as_ref().unwrap().lock().unwrap();
             let mut buf = vec![0_u8; d.length];
-            df.seek(std::io::SeekFrom::Start(d.start as u64)).unwrap();
-            df.read_exact(&mut buf).unwrap();
-            let str = std::str::from_utf8(&buf).unwrap();
+            df.seek(std::io::SeekFrom::Start(d.start as u64))?;
+            df.read_exact(&mut buf)?;
+            let str = std::str::from_utf8(&buf)?;
             assert_eq!(str, format!("## {}\n{}", data[i].title, data[i].text));
         }
 
@@ -275,16 +279,16 @@ mod tests {
 
     #[test]
     fn storage_read() -> Result<()> {
-        let store = Store::load_from_file(Path::new("../test-data")).unwrap();
+        let store = Store::load_from_file(Path::new("../test-data"))?;
 
-        let mut embed = Embed::new().unwrap();
+        let mut embed = Embed::new()?;
         let qry = embed
             .query("What are some latest news about Iraq?")
-            .unwrap()
+            ?
             .to_device(&candle_core::Device::Cpu)
-            .unwrap();
+            ?;
 
-        let res = store.search(&qry, 4, None).unwrap();
+        let res = store.search(&qry, 4, None)?;
         println!("{:?}", res);
         Ok(())
     }
