@@ -2,6 +2,7 @@ use candle_core::{DType, Device, IndexOp, Tensor, D};
 use candle_nn::{
     linear, linear_no_bias, rms_norm, Activation, Linear, Module, RmsNorm, VarBuilder,
 };
+
 use std::sync::Arc;
 
 pub const STELLA_MAX_BATCH: usize = 4;
@@ -215,16 +216,6 @@ impl Attention {
             self.rotary_emb
                 .apply_rotary_emb_qkv(&query_states, &key_states, seqlen_offset)?;
 
-        // let (key_states, value_states) = match &self.kv_cache {
-        //     None => (key_states, value_states),
-        //     Some((prev_k, prev_v)) => {
-        //         let key_states = Tensor::cat(&[prev_k, &key_states], 2)?;
-        //         let value_states = Tensor::cat(&[prev_v, &value_states], 2)?;
-        //         (key_states, value_states)
-        //     }
-        // };
-        // self.kv_cache = Some((key_states.clone(), value_states.clone()));
-
         let key_states = repeat_kv(key_states, self.num_kv_groups)?.contiguous()?;
         let value_states = repeat_kv(value_states, self.num_kv_groups)?.contiguous()?;
 
@@ -244,10 +235,6 @@ impl Attention {
             .reshape((b_sz, q_len, self.hidden_size))?
             .apply(&self.o_proj)
     }
-
-    // fn clear_kv_cache(&mut self) {
-    //     self.kv_cache = None
-    // }
 }
 
 #[derive(Debug, Clone)]
@@ -266,7 +253,6 @@ impl DecoderLayer {
     ) -> candle_core::Result<Self> {
         let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
-        // let input_layernorm = RmsNorm::new(vb.pp("input_layernorm").get(s, name), cfg.rms_norm_eps);
         let input_layernorm =
             rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let post_attention_layernorm = rms_norm(

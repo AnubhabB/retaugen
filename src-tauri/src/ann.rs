@@ -241,18 +241,15 @@ mod tests {
             }
         }
 
-        let tensor = Tensor::stack(&all_tensors, 0)
-            ?
-            .reshape((STELLA_MAX_BATCH * NUM_CHUNKS, 1024))
-            ?;
+        let tensor =
+            Tensor::stack(&all_tensors, 0)?.reshape((STELLA_MAX_BATCH * NUM_CHUNKS, 1024))?;
 
         let store = ANNIndex::build_index(
             5,
             16,
             &tensor,
             &(0..STELLA_MAX_BATCH * NUM_CHUNKS).collect::<Vec<_>>()[..],
-        )
-        ?;
+        )?;
 
         println!("Indexed!!");
         let qry = embed.query("What are the latest news about Iraq?")?;
