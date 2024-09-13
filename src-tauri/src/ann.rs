@@ -234,7 +234,7 @@ mod tests {
         let chunks = data.chunks(STELLA_MAX_BATCH).take(NUM_CHUNKS);
         let mut all_tensors = vec![];
         for c in chunks {
-            if let Ok(e) = embed.embeddings(c) {
+            if let Ok(e) = embed.embeddings(crate::embed::ForEmbed::Docs(c)) {
                 all_tensors.push(e);
             } else {
                 continue;

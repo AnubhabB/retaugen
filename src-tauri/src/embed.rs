@@ -12,6 +12,11 @@ pub struct Embed {
     tokenizer: Tokenizer,
 }
 
+pub enum ForEmbed<'a> {
+    Query(&'a str),
+    Docs(&'a [String]),
+}
+
 impl Embed {
     pub fn new() -> Result<Self> {
         // Config straitup copied from https://huggingface.co/dunzhang/stella_en_1.5B_v5/blob/main/config.json
@@ -57,8 +62,11 @@ impl Embed {
     }
 
     pub fn query(&mut self, query: &str) -> Result<Tensor> {
-        let query = format!("Instruct: Given a web search query, retrieve relevant passages that answer the query.\nQuery:{query}");
-        let tokens = self.tokenize(&[query])?;
+        let tokens = self.tokenize(
+            ForEmbed::Query(
+                    format!("Instruct: Given a web search query, retrieve relevant passages that answer the query.\nQuery:{query}").as_str()
+                )
+            )?;
 
         let ids = Tensor::from_iter(
             tokens[0]
@@ -83,7 +91,7 @@ impl Embed {
         Ok(self.model.forward(&ids, &mask, 0)?)
     }
 
-    pub fn embeddings(&mut self, doc_batch: &[String]) -> Result<Tensor> {
+    pub fn embeddings(&mut self, doc_batch: ForEmbed<'_>) -> Result<Tensor> {
         let mut token_batch = self.tokenize(doc_batch)?;
         let mut ids = Tensor::zeros(
             (token_batch.len(), token_batch[0].get_ids().len()),
@@ -109,16 +117,18 @@ impl Embed {
         Ok(self.model.forward(&ids, &masks, 0)?)
     }
 
-    fn tokenize(&self, query: &[String]) -> Result<Vec<Encoding>> {
-        if query.len() == 1 {
-            Ok(vec![self
+    // pub fn split_text(&self, doc_batch: &[String]) -> Result<Vec<>>
+
+    fn tokenize(&self, doc: ForEmbed) -> Result<Vec<Encoding>> {
+        match doc {
+            ForEmbed::Query(q) => Ok(vec![self
                 .tokenizer
-                .encode(query[0].as_str(), true)
-                .map_err(|e| anyhow!(e))?])
-        } else {
-            self.tokenizer
-                .encode_batch(query.to_vec(), true)
-                .map_err(|e| anyhow!(e))
+                .encode(q, true)
+                .map_err(|e| anyhow!(e))?]),
+            ForEmbed::Docs(d) => self
+                .tokenizer
+                .encode_batch(d.to_vec(), true)
+                .map_err(|e| anyhow!(e)),
         }
     }
 }
@@ -134,10 +144,10 @@ mod tests {
         let mut embed = Embed::new()?;
 
         let qry = embed.query("What are some ways to reduce stress?")?; // [1, 1024]
-        let docs = embed.embeddings(&[
+        let docs = embed.embeddings(crate::embed::ForEmbed::Docs(&[
             "There are many effective ways to reduce stress. Some common techniques include deep breathing, meditation, and physical activity. Engaging in hobbies, spending time in nature, and connecting with loved ones can also help alleviate stress. Additionally, setting boundaries, practicing self-care, and learning to say no can prevent stress from building up.".to_string(),
             "Green tea has been consumed for centuries and is known for its potential health benefits. It contains antioxidants that may help protect the body against damage caused by free radicals. Regular consumption of green tea has been associated with improved heart health, enhanced cognitive function, and a reduced risk of certain types of cancer. The polyphenols in green tea may also have anti-inflammatory and weight loss properties.".to_string(),
-        ])?; // [2, 1024]
+        ]))?; // [2, 1024]
 
         // a matmul should do the trick
         let res = qry.matmul(&docs.t()?)?;

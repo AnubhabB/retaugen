@@ -283,10 +283,6 @@ impl DecoderLayer {
         let xs = xs.apply(&self.post_attention_layernorm)?.apply(&self.mlp)?;
         residual + xs
     }
-
-    // fn clear_kv_cache(&mut self) {
-    //     self.self_attn.clear_kv_cache()
-    // }
 }
 
 #[derive(Debug, Clone)]

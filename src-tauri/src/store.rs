@@ -250,7 +250,7 @@ mod tests {
                     .map(|t| format!("## {}\n{}", t.title, t.text))
                     .collect::<Vec<_>>();
 
-                if let Ok(e) = embed.embeddings(&batch) {
+                if let Ok(e) = embed.embeddings(crate::embed::ForEmbed::Docs(&batch)) {
                     let data = batch
                         .par_iter()
                         .enumerate()
