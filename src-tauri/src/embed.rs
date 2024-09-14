@@ -1,23 +1,28 @@
 use anyhow::{anyhow, Result};
-use candle_core::{DType, Device, Tensor};
+use candle_core::{DType, Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
-use tokenizers::{Encoding, PaddingDirection, PaddingParams, PaddingStrategy, Tokenizer};
+use text_splitter::{ChunkConfig, MarkdownSplitter};
+use tokenizers::{EncodeInput, Encoding, PaddingDirection, PaddingParams, PaddingStrategy, Tokenizer};
 
-use crate::utils::select_device;
+use crate::{stella::Config, utils::select_device};
 
 // A container for our embedding related tasks
 pub struct Embed {
     device: Device,
     model: crate::stella::Stella,
     tokenizer: Tokenizer,
+    splitter: MarkdownSplitter<Tokenizer>
 }
 
-pub enum ForEmbed<'a> {
+pub enum ForEmbed<'a, T>
+where T: Into<EncodeInput<'a>> + Clone {
     Query(&'a str),
-    Docs(&'a [String]),
+    Docs(&'a [T]),
 }
 
 impl Embed {
+    pub const SPLIT_SIZE: usize = 512;
+
     pub fn new() -> Result<Self> {
         // Config straitup copied from https://huggingface.co/dunzhang/stella_en_1.5B_v5/blob/main/config.json
         let cfg = crate::stella::Config::default();
@@ -54,16 +59,23 @@ impl Embed {
             ..Default::default()
         }));
 
+        let splitter = MarkdownSplitter::new(
+            ChunkConfig::new(Self::SPLIT_SIZE)
+            .with_sizer(tokenizer.clone())
+            .with_overlap(Self::SPLIT_SIZE / 4)?
+        );
+
         Ok(Self {
             device,
             model,
             tokenizer,
+            splitter
         })
     }
 
     pub fn query(&mut self, query: &str) -> Result<Tensor> {
         let tokens = self.tokenize(
-            ForEmbed::Query(
+            ForEmbed::<&str>::Query(
                     format!("Instruct: Given a web search query, retrieve relevant passages that answer the query.\nQuery:{query}").as_str()
                 )
             )?;
@@ -91,7 +103,7 @@ impl Embed {
         Ok(self.model.forward(&ids, &mask, 0)?)
     }
 
-    pub fn embeddings(&mut self, doc_batch: ForEmbed<'_>) -> Result<Tensor> {
+    pub fn embeddings<'a, T: Into<EncodeInput<'a>> + Clone + Send>(&mut self, doc_batch: ForEmbed<'a, T>) -> Result<Tensor> {
         let mut token_batch = self.tokenize(doc_batch)?;
         let mut ids = Tensor::zeros(
             (token_batch.len(), token_batch[0].get_ids().len()),
@@ -117,9 +129,28 @@ impl Embed {
         Ok(self.model.forward(&ids, &masks, 0)?)
     }
 
-    // pub fn split_text(&self, doc_batch: &[String]) -> Result<Vec<>>
+    pub fn split_text_and_encode(&mut self, doc: &str) -> Vec<(std::string::String, candle_core::Tensor)> {
+        let splits = self.splitter.chunks(doc).collect::<Vec<_>>();
+        
+        splits.chunks(Config::STELLA_MAX_BATCH)
+            .flat_map(|c| {
+                let embed = self.embeddings(ForEmbed::Docs(c)).ok()?;
+                Some(
+                    c.iter().enumerate()
+                    .filter_map(move |(i, &txt)| {
+                        if let Ok(t) = embed.i(i) {
+                            Some((txt.to_string(), t))
+                        } else {
+                            None
+                        }
+                    }).collect::<Vec<_>>()
+                )
+            })
+            .flatten()
+            .collect::<Vec<_>>()
+    }
 
-    fn tokenize(&self, doc: ForEmbed) -> Result<Vec<Encoding>> {
+    fn tokenize<'a, T: Into<EncodeInput<'a>> + Clone + Send>(&self, doc: ForEmbed<'a, T>) -> Result<Vec<Encoding>> {
         match doc {
             ForEmbed::Query(q) => Ok(vec![self
                 .tokenizer
@@ -153,6 +184,45 @@ mod tests {
         let res = qry.matmul(&docs.t()?)?;
 
         println!("{res}");
+        Ok(())
+    }
+
+    #[test]
+    fn split_and_encode() -> Result<()> {
+        let docs = &[
+            "There are many effective ways to reduce stress. Some common techniques include deep breathing, meditation, and physical activity. Engaging in hobbies, spending time in nature, and connecting with loved ones can also help alleviate stress. Additionally, setting boundaries, practicing self-care, and learning to say no can prevent stress from building up.".to_string(),
+            "## President of China lunches with Brazilian President
+Brazil
+
+Hu Jintao, the President of the People's Republic of China had lunch today with the President of Brazil, Luiz Inácio Lula da Silva, at the Granja do Torto, the President's country residence in the Brazilian Federal District. Lunch was a traditional Brazilian barbecue with different kinds of meat.
+
+Some Brazilian ministers were present at the event: Antonio Palocci (Economy), Eduardo Campos (Science and Technology), Roberto Rodrigues (Agriculture), Luiz Fernando Furlan (Development), Celso Amorim (Exterior Relations), Dilma Rousseff (Mines and Energy). Also present were Roger Agnelli (Vale do Rio Doce company president) and Eduardo Dutra (Petrobras, government oil company, president).
+
+This meeting is part of a new political economy agreement between Brazil and China where Brazil has recognized mainland China's market economy status, and China has promised to buy more Brazilian products.## Palestinians to elect new president on January 9
+Acting president Rawhi Fattuh has announced today that Palestinian elections will be held on January 9. Futtuh, head of the Palestinian parliament, was sworn in hours after the death of Yasser Arafat on Thursday, and Palestinian Basic Law dictates that he may only serve up to two months before elections are held.
+
+New leadership could prove to be the key to revitalizing the peace process in the Middle East, as both Israel and the United States had refused to work with Arafat.
+
+The Haaretz had initially reported that former prime minister Mahmoud Abbas was selected by the Fatah central committee as their candidate for president, but Abbas has denied this, saying, \"the matter is still being discussed.\" There have also been conflicting reports on whether or not jailed Palestinian leader Marwan Barghouti will run.
+
+Barghouti is currently serving five life sentences in Israel for attacks against Israelis. Nonetheless, he remains a popular figure among Palestinians for his role in the Palestinian uprising, and could potentially win the election if he decided to run.
+
+A win by Barghouti could put Israel in an awkward spot; however an Israeli official said this week that he would not be freed, and a landslide win by Barghouti would signify to them that the Palestinians were not yet ready for peace.## Brazilian delegation returns from Arafat funeral
+PalestineThe delegation representing Brazil at the funeral of Yasser Arafat returned today, November 13, 2004. The chief-minister of Civil House José Dirceu was a member of the delegation. Unfortunately they arrived too late for the funeral and the delegation watched only part of the funeral activities.
+
+PCdoB (Brazilian communist political party) Deputy Jamil Murad, member of the delegation, said there was a \"deep mourning\" feeling. Jamil Murad had visited Yasser Arafat in April 2004, along with nine other Brazilian deputies. According to Jamil Murad: \"Yasser Arafat was a Palestinian leader who became a world projection leader\". He said Arafat had written him a letter thanking the Brazilian people for their support of the Palestinian cause and saying that he, Arafat, considered President Luiz Inácio Lula da Silva a great world leader.## Hearing begins over David Hookes death
+A hearing started today over the death of Australian cricket coach David Hookes. Hookes died after an incident outside a hotel in Melbourne, Australia on the 19th of January.
+
+Bouncer Zdravko Micevic, 22, is charged with manslaughter.".to_string()
+        ];
+
+        let mut embed = Embed::new()?;
+        docs.iter().for_each(|d| {
+            let d = embed.split_text_and_encode(d);
+            d.iter().for_each(|(s, _)| {
+                println!("{s:?}\n\n");
+            });
+        });
         Ok(())
     }
 }

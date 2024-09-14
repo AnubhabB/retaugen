@@ -211,7 +211,7 @@ mod tests {
     use candle_core::Tensor;
     use serde::Deserialize;
 
-    use crate::{ann::ANNIndex, embed::Embed, stella::STELLA_MAX_BATCH};
+    use crate::{ann::ANNIndex, embed::Embed, stella::Config};
 
     #[derive(Deserialize)]
     struct WikiNews {
@@ -231,7 +231,7 @@ mod tests {
 
         let mut embed = Embed::new()?;
 
-        let chunks = data.chunks(STELLA_MAX_BATCH).take(NUM_CHUNKS);
+        let chunks = data.chunks(Config::STELLA_MAX_BATCH).take(NUM_CHUNKS);
         let mut all_tensors = vec![];
         for c in chunks {
             if let Ok(e) = embed.embeddings(crate::embed::ForEmbed::Docs(c)) {
@@ -242,13 +242,13 @@ mod tests {
         }
 
         let tensor =
-            Tensor::stack(&all_tensors, 0)?.reshape((STELLA_MAX_BATCH * NUM_CHUNKS, 1024))?;
+            Tensor::stack(&all_tensors, 0)?.reshape((Config::STELLA_MAX_BATCH * NUM_CHUNKS, 1024))?;
 
         let store = ANNIndex::build_index(
             5,
             16,
             &tensor,
-            &(0..STELLA_MAX_BATCH * NUM_CHUNKS).collect::<Vec<_>>()[..],
+            &(0..Config::STELLA_MAX_BATCH * NUM_CHUNKS).collect::<Vec<_>>()[..],
         )?;
 
         println!("Indexed!!");
