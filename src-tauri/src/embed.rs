@@ -73,6 +73,7 @@ impl Embed {
         })
     }
 
+    // Prepends `prompt` template and tokenizes a `query`
     pub fn query(&mut self, query: &str) -> Result<Tensor> {
         let tokens = self.tokenize(
             ForEmbed::<&str>::Query(
@@ -103,6 +104,7 @@ impl Embed {
         Ok(self.model.forward(&ids, &mask, 0)?)
     }
 
+    // Tokenizes a doc text batch
     pub fn embeddings<'a, T: Into<EncodeInput<'a>> + Clone + Send>(&mut self, doc_batch: ForEmbed<'a, T>) -> Result<Tensor> {
         let mut token_batch = self.tokenize(doc_batch)?;
         let mut ids = Tensor::zeros(

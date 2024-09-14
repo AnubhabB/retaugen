@@ -20,6 +20,7 @@ bincode            = "1"
 candle-core        = { git = "https://github.com/huggingface/candle.git", version = "0.6.1", features = ["metal"] }
 candle-nn          = { git = "https://github.com/huggingface/candle.git", version = "0.6.1", features = ["metal"] }
 dashmap            = { version = "6", features = ["rayon"] }
+image              = { version = "0", default-features = false, features = ["rayon", "png"] }
 rand               = "0"
 rayon              = "1"
 tauri              = { version = "2.0.0-rc", features = [] }
