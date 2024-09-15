@@ -241,8 +241,8 @@ mod tests {
             }
         }
 
-        let tensor =
-            Tensor::stack(&all_tensors, 0)?.reshape((Config::STELLA_MAX_BATCH * NUM_CHUNKS, 1024))?;
+        let tensor = Tensor::stack(&all_tensors, 0)?
+            .reshape((Config::STELLA_MAX_BATCH * NUM_CHUNKS, 1024))?;
 
         let store = ANNIndex::build_index(
             5,

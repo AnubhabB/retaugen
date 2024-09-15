@@ -2,7 +2,9 @@ use anyhow::{anyhow, Result};
 use candle_core::{DType, Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use text_splitter::{ChunkConfig, MarkdownSplitter};
-use tokenizers::{EncodeInput, Encoding, PaddingDirection, PaddingParams, PaddingStrategy, Tokenizer};
+use tokenizers::{
+    EncodeInput, Encoding, PaddingDirection, PaddingParams, PaddingStrategy, Tokenizer,
+};
 
 use crate::{stella::Config, utils::select_device};
 
@@ -11,11 +13,13 @@ pub struct Embed {
     device: Device,
     model: crate::stella::Stella,
     tokenizer: Tokenizer,
-    splitter: MarkdownSplitter<Tokenizer>
+    splitter: MarkdownSplitter<Tokenizer>,
 }
 
 pub enum ForEmbed<'a, T>
-where T: Into<EncodeInput<'a>> + Clone {
+where
+    T: Into<EncodeInput<'a>> + Clone,
+{
     Query(&'a str),
     Docs(&'a [T]),
 }
@@ -61,15 +65,15 @@ impl Embed {
 
         let splitter = MarkdownSplitter::new(
             ChunkConfig::new(Self::SPLIT_SIZE)
-            .with_sizer(tokenizer.clone())
-            .with_overlap(Self::SPLIT_SIZE / 4)?
+                .with_sizer(tokenizer.clone())
+                .with_overlap(Self::SPLIT_SIZE / 4)?,
         );
 
         Ok(Self {
             device,
             model,
             tokenizer,
-            splitter
+            splitter,
         })
     }
 
@@ -105,7 +109,10 @@ impl Embed {
     }
 
     // Tokenizes a doc text batch
-    pub fn embeddings<'a, T: Into<EncodeInput<'a>> + Clone + Send>(&mut self, doc_batch: ForEmbed<'a, T>) -> Result<Tensor> {
+    pub fn embeddings<'a, T: Into<EncodeInput<'a>> + Clone + Send>(
+        &mut self,
+        doc_batch: ForEmbed<'a, T>,
+    ) -> Result<Tensor> {
         let mut token_batch = self.tokenize(doc_batch)?;
         let mut ids = Tensor::zeros(
             (token_batch.len(), token_batch[0].get_ids().len()),
@@ -131,28 +138,37 @@ impl Embed {
         Ok(self.model.forward(&ids, &masks, 0)?)
     }
 
-    pub fn split_text_and_encode(&mut self, doc: &str) -> Vec<(std::string::String, candle_core::Tensor)> {
+    pub fn split_text_and_encode(
+        &mut self,
+        doc: &str,
+    ) -> Vec<(std::string::String, candle_core::Tensor)> {
         let splits = self.splitter.chunks(doc).collect::<Vec<_>>();
-        
-        splits.chunks(Config::STELLA_MAX_BATCH)
+
+        splits
+            .chunks(Config::STELLA_MAX_BATCH)
             .flat_map(|c| {
                 let embed = self.embeddings(ForEmbed::Docs(c)).ok()?;
                 Some(
-                    c.iter().enumerate()
-                    .filter_map(move |(i, &txt)| {
-                        if let Ok(t) = embed.i(i) {
-                            Some((txt.to_string(), t))
-                        } else {
-                            None
-                        }
-                    }).collect::<Vec<_>>()
+                    c.iter()
+                        .enumerate()
+                        .filter_map(move |(i, &txt)| {
+                            if let Ok(t) = embed.i(i) {
+                                Some((txt.to_string(), t))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>(),
                 )
             })
             .flatten()
             .collect::<Vec<_>>()
     }
 
-    fn tokenize<'a, T: Into<EncodeInput<'a>> + Clone + Send>(&self, doc: ForEmbed<'a, T>) -> Result<Vec<Encoding>> {
+    fn tokenize<'a, T: Into<EncodeInput<'a>> + Clone + Send>(
+        &self,
+        doc: ForEmbed<'a, T>,
+    ) -> Result<Vec<Encoding>> {
         match doc {
             ForEmbed::Query(q) => Ok(vec![self
                 .tokenizer
