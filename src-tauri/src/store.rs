@@ -45,7 +45,7 @@ pub struct Data {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum FileKind {
     Html(PathBuf),
-    Pdf(PathBuf),
+    Pdf((PathBuf, usize)),
     Text(PathBuf),
 }
 
@@ -272,10 +272,8 @@ mod tests {
             })
             .flatten();
 
-        println!("Begin insert!");
         let (mut text_file, _) = store.files()?;
         store.insert(&mut text_file, &mut chunks)?;
-        println!("Preparing to test ..{}", store.data.len());
 
         // Ok, now let's test we have saved it right or not
         for (i, d) in store.data.iter().enumerate() {

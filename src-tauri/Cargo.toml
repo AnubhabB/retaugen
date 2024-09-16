@@ -22,6 +22,7 @@ candle-nn          = { git = "https://github.com/huggingface/candle.git", versio
 dashmap            = { version = "6", features = ["rayon"] }
 image              = { version = "0", default-features = false, features = ["rayon", "jpeg"] }
 ort                = { version = "2.0.0-rc.6" }
+pdfium-render      = { version = "0" }
 rand               = "0"
 rayon              = "1"
 tauri              = { version = "2.0.0-rc", features = [] }

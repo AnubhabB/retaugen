@@ -1,0 +1,2 @@
+[env]
+PDFIUM_DYNAMIC_LIB_PATH = { value = "../binaries/pdfium", relative = true }

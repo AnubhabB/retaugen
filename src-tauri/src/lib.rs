@@ -1,4 +1,5 @@
 mod ann;
+mod docs;
 mod embed;
 mod layout;
 mod stella;
