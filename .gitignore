@@ -11,3 +11,5 @@ vite.config.ts.timestamp-*
 *.safetensors
 *tokenizer.json
 *.onnx
+*.gguf
+binaries/pdfium
