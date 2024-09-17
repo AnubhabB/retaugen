@@ -42,7 +42,7 @@ pub struct RegionOfInterest {
     kind: DetectedElem,
     // the bounding box - x1, y1, x2, y2 - top, left, bottom, right
     bbox: [f32; 4],
-    confidence: f32
+    confidence: f32,
 }
 
 impl RegionOfInterest {
@@ -77,7 +77,7 @@ impl Detectron2Model {
     /// Required input image height.
     pub const REQUIRED_HEIGHT: usize = 1035;
     /// Default confidence threshold for detections.
-    pub const DEFAULT_CONFIDENCE_THRESHOLD: f32 = 0.85;
+    pub const DEFAULT_CONFIDENCE_THRESHOLD: f32 = 0.8;
 
     pub fn new() -> Result<Self> {
         // Loading and initializing the model from `onnx` file
@@ -138,10 +138,9 @@ impl Detectron2Model {
         .concat();
 
         // Create a `ndarray` input for `ort` runtime to consume
-        let input = ort::Value::from_array(
-            ([3, Self::REQUIRED_HEIGHT, Self::REQUIRED_WIDTH], &t[..])
-        )?;
-        
+        let input =
+            ort::Value::from_array(([3, Self::REQUIRED_HEIGHT, Self::REQUIRED_WIDTH], &t[..]))?;
+
         Ok((img_width, img_height, input.into()))
     }
 
@@ -158,8 +157,8 @@ impl Detectron2Model {
         let bboxes = &outputs[0].try_extract_tensor::<f32>()?;
         // Shape: [num pred]
         let labels = &outputs[1].try_extract_tensor::<i64>()?;
-         // 3 for MASK_RCNN_X_101_32X8D_FPN_3x | 2 for FASTER_RCNN_R_50_FPN_3X
-         // Shape: [num pred]
+        // 3 for MASK_RCNN_X_101_32X8D_FPN_3x | 2 for FASTER_RCNN_R_50_FPN_3X
+        // Shape: [num pred]
         let confidence = &outputs[3].try_extract_tensor::<f32>()?;
 
         // We had originally `resized` the image to fit
@@ -196,7 +195,7 @@ impl Detectron2Model {
                         x2 * width_factor,
                         y2 * height_factor,
                     ],
-                    confidence
+                    confidence,
                 })
             })
             .collect::<Vec<_>>();
