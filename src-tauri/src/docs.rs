@@ -42,7 +42,7 @@ pub fn pdf_to_text(files: &[&PathBuf]) -> Result<Vec<Vec<(String, FileKind)>>> {
     let pdfium = Pdfium::new(Pdfium::bind_to_library(
         Pdfium::pdfium_platform_library_name_at_path(env!("PDFIUM_DYNAMIC_LIB_PATH")),
     )?);
-    
+
     // Some config for `pdfium` rendering
     let cfg = PdfRenderConfig::new()
         .set_target_width(Detectron2Model::REQUIRED_WIDTH as i32)
@@ -81,7 +81,7 @@ pub fn pdf_to_text(files: &[&PathBuf]) -> Result<Vec<Vec<(String, FileKind)>>> {
                         .filter_map(|e| {
                             // The bounding box for the region of interest
                             let bbox = e.bbox(); // x1, y1, x2, y2
-                            
+
                             // The bounding boxes for the predicted regions follow a `left-top` co-ordinate system
                             // But `pdfium` uses a bottom-left coordinate system, let's convert it
                             // We'll also factor in the original page size here

@@ -239,7 +239,7 @@ mod tests {
         };
 
         let mut store = Store::load_from_file(Path::new("../test-data"), None, None)?;
-        let mut embed = Embed::new()?;
+        let mut embed = Embed::new(Path::new("../models"))?;
 
         let mut chunks = data
             .chunks(Config::STELLA_MAX_BATCH)
@@ -292,7 +292,7 @@ mod tests {
     fn storage_read() -> Result<()> {
         let store = Store::load_from_file(Path::new("../test-data"), Some(16), Some(16))?;
 
-        let mut embed = Embed::new()?;
+        let mut embed = Embed::new(Path::new("../models"))?;
         let qry = embed
             .query("What are the latest news about Iraq?")?
             .to_device(&candle_core::Device::Cpu)?;

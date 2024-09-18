@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use anyhow::{anyhow, Result};
 use candle_core::{DType, Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
@@ -26,8 +28,11 @@ where
 
 impl Embed {
     pub const SPLIT_SIZE: usize = 512;
+    pub const BASE_MODEL_FILE: &'static str = "qwen2.safetensors";
+    pub const HEAD_MODEL_FILE: &'static str = "embed_head1024.safetensors";
+    pub const TOKENIZER_FILE: &'static str = "qwen_tokenizer.json";
 
-    pub fn new() -> Result<Self> {
+    pub fn new(dir: &Path) -> Result<Self> {
         // Config straitup copied from https://huggingface.co/dunzhang/stella_en_1.5B_v5/blob/main/config.json
         let cfg = crate::stella::Config::default();
 
@@ -36,7 +41,7 @@ impl Embed {
         // unsafe inherited from candle_core::safetensors
         let qwen = unsafe {
             VarBuilder::from_mmaped_safetensors(
-                &["../models/qwen2.safetensors"],
+                &[dir.join(Self::BASE_MODEL_FILE)],
                 candle_core::DType::F32, // TODO: why is this giving `NaN` @ F16
                 &device,
             )?
@@ -44,7 +49,7 @@ impl Embed {
 
         let head = unsafe {
             VarBuilder::from_mmaped_safetensors(
-                &["../models/embed_head1024.safetensors"],
+                &[dir.join(Self::HEAD_MODEL_FILE)],
                 candle_core::DType::F32,
                 &device,
             )?
@@ -52,7 +57,7 @@ impl Embed {
 
         let model = crate::stella::Stella::new(&cfg, qwen, head)?;
         let mut tokenizer =
-            Tokenizer::from_file("../models/qwen_tokenizer.json").map_err(|e| anyhow!(e))?;
+            Tokenizer::from_file(dir.join(Self::TOKENIZER_FILE)).map_err(|e| anyhow!(e))?;
         let pad_id = tokenizer.token_to_id("<|endoftext|>").unwrap();
 
         tokenizer.with_padding(Some(PaddingParams {
@@ -184,13 +189,15 @@ impl Embed {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use anyhow::Result;
 
     use super::Embed;
 
     #[test]
     fn basic_similarity() -> Result<()> {
-        let mut embed = Embed::new()?;
+        let mut embed = Embed::new(Path::new("../models"))?;
 
         let qry = embed.query("What are some ways to reduce stress?")?; // [1, 1024]
         let docs = embed.embeddings(crate::embed::ForEmbed::Docs(&[
@@ -234,7 +241,7 @@ A hearing started today over the death of Australian cricket coach David Hookes.
 Bouncer Zdravko Micevic, 22, is charged with manslaughter.".to_string()
         ];
 
-        let mut embed = Embed::new()?;
+        let mut embed = Embed::new(Path::new("../models"))?;
         docs.iter().for_each(|d| {
             let d = embed.split_text_and_encode(d);
             d.iter().for_each(|(s, _)| {

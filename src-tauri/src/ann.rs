@@ -207,6 +207,8 @@ impl ANNIndex {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use anyhow::Result;
     use candle_core::Tensor;
     use serde::Deserialize;
@@ -229,7 +231,7 @@ mod tests {
             .map(|d| format!("## {}\n{}", d.title, d.text))
             .collect::<Vec<_>>();
 
-        let mut embed = Embed::new()?;
+        let mut embed = Embed::new(Path::new("../models"))?;
 
         let chunks = data.chunks(Config::STELLA_MAX_BATCH).take(NUM_CHUNKS);
         let mut all_tensors = vec![];
