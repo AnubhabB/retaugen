@@ -152,18 +152,6 @@ impl Generator {
     }
 }
 
-// """You are an AI assistant tasked with breaking down complex queries into simpler sub-queries for a RAG system.
-// Given the original query, decompose it into 2-4 simpler sub-queries that, when answered together, would provide a comprehensive response to the original query.
-
-// Original query: {original_query}
-
-// example: What are the impacts of climate change on the environment?
-
-// Sub-queries:
-// 1. What are the impacts of climate change on biodiversity?
-// 2. How does climate change affect the oceans?
-// 3. What are the effects of climate change on agriculture?
-// 4. What are the impacts of climate change on human health?"""
 
 #[cfg(test)]
 mod tests {
