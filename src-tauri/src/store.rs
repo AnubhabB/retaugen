@@ -9,7 +9,7 @@ use anyhow::{anyhow, Result};
 use candle_core::{safetensors, Tensor};
 use serde::{Deserialize, Serialize};
 
-use crate::ann::ANNIndex;
+use crate::{ann::ANNIndex, utils::dedup_text};
 
 const EMBED_FILE: &str = "embed.data";
 const TEXT_FILE: &str = "text.data";
@@ -42,7 +42,7 @@ pub struct Data {
     indexed: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum FileKind {
     Html(PathBuf),
     Pdf((PathBuf, usize)),
@@ -177,6 +177,85 @@ impl Store {
             .collect::<Vec<_>>();
 
         Ok(res)
+    }
+
+    /// Given an index `idx` returns `k` adjacent chunks before and after the index
+    /// Returns k text blocks before with overlap removed, the current text with overlap removed and k text blocks after, again overlap removed
+    pub fn with_k_adjacent(&self, idx: usize, k: usize) -> Result<(Vec<String>, String, Vec<String>)> {
+        // Let's collect all indices that need to be fethed
+        // We have to ensure indices that are in the SAME source file
+        let start = if k > idx { 0 } else { idx - k };
+        let end = (idx + k).max(self.data.len());
+
+        let trg_data = if let Some(d) = self.data.get(idx) {
+            d
+        } else {
+            eprintln!("Nothing found for index {idx}. Corrupt store!");
+            return Err(anyhow!("corrupt store!"))
+        };
+
+        let trg_src = match &trg_data.file {
+            FileKind::Text(p) => p.as_path(),
+            FileKind::Pdf((p, _)) => p.as_path(),
+            FileKind::Html(p) => p.as_path(),
+        };
+
+        let mut adjacent_chunks = (start .. end)
+        .filter_map(|index| {
+            let data = if index == idx {
+                trg_data
+            } else if let Some(d) = self.data.get(index) {
+                d
+            } else {
+                eprintln!("Nothing found for data point {index}");
+                return None;
+            };
+
+            let src = match &data.file {
+                FileKind::Text(p) => p.as_path(),
+                FileKind::Pdf((p, _)) => p.as_path(),
+                FileKind::Html(p) => p.as_path(),
+            };
+
+            // Not neighbors if indices are not from the same source file
+            if src != trg_src {
+                return None;
+            }
+
+            
+            self.chunk(data).ok().map(|c| (c, index))
+        }).collect::<Vec<_>>();
+
+        // We have the neighbors, lets de-dup them
+        // TODO: figure out de-dup in the same loop as before
+        let mut i = 1;
+        while i < adjacent_chunks.len() {
+            adjacent_chunks[i - 1].0 = dedup_text(&adjacent_chunks[i - 1].0, &adjacent_chunks[i].0)?;
+            i += 1;
+        }
+
+        Ok((
+            vec![],
+            String::new(),
+            vec![]
+        ))
+    }
+
+    /// Given a datapoint, returns the text chunk for that datapoint
+    pub fn chunk(&self, data: &Data) -> Result<String> {
+        let df = if let Some(df) = self.data_file.as_ref() {
+            df
+        } else {
+            return Err(anyhow!("Store not initialized!"));
+        };
+
+        let mut f = df.lock().map_err(|e| anyhow!("error acquiring data file lock"))?;
+        f.seek(std::io::SeekFrom::Start(data.start as u64))?;
+
+        let mut buf = vec![0; data.length];
+        f.read_exact(&mut buf)?;
+
+        String::from_utf8(buf).map_err(|e| anyhow!(e))
     }
 
     /// Returns the files associated with this store
