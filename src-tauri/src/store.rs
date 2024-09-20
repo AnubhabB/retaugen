@@ -1,15 +1,13 @@
 use std::{
-    fs::{self, File, OpenOptions},
-    io::{BufReader, Read, Seek, Write},
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    cmp::Ordering, collections::HashMap, fs::{self, File, OpenOptions}, io::{BufReader, Read, Seek, Write}, path::{Path, PathBuf}, sync::{Arc, Mutex}
 };
 
 use anyhow::{anyhow, Result};
+use bm25::{Document, Language, SearchEngine, SearchEngineBuilder};
 use candle_core::{safetensors, Tensor};
 use serde::{Deserialize, Serialize};
 
-use crate::{ann::ANNIndex, utils::dedup_text};
+use crate::{ann::ANNIndex, docs, utils::dedup_text};
 
 const EMBED_FILE: &str = "embed.data";
 const TEXT_FILE: &str = "text.data";
@@ -30,6 +28,8 @@ pub struct Store {
     data_file: Option<Arc<Mutex<BufReader<File>>>>,
     #[serde(skip)]
     index: Option<ANNIndex>,
+    #[serde(skip)]
+    bm25: Option<SearchEngine<usize>>
 }
 
 /// in `struct Data` we maintain the source file of the data and along with it the chunk of text being indexed
@@ -64,10 +64,11 @@ impl Store {
 
             let mut store = bincode::deserialize::<Store>(&buf)?;
 
-            store.build_index(num_trees.map_or(16, |n| n), max_size.map_or(16, |sz| sz))?;
             store.data_file = Some(Arc::new(Mutex::new(BufReader::new(File::open(
                 dir.join(TEXT_FILE),
             )?))));
+
+            store.build_index(num_trees.map_or(16, |n| n), max_size.map_or(16, |sz| sz))?;
 
             store
         } else {
@@ -139,44 +140,41 @@ impl Store {
     pub fn search(
         &self,
         qry: &Tensor,
+        qry_str: &str,
         top_k: usize,
-        cutoff: Option<f32>,
-    ) -> Result<Vec<(&Data, String, f32)>> {
-        let index = if let Some(idx) = &self.index {
+        ann_cutoff: Option<f32>,
+    ) -> Result<Vec<(usize, &Data, String, f32)>> {
+        let ann = if let Some(idx) = &self.index {
             idx
-        } else {
-            return Err(anyhow!("ANN Index not ready!"));
-        };
-
-        let res = index
-            .search_approximate(qry, top_k, cutoff)?
+            .search_approximate(qry, top_k, ann_cutoff)?
             .iter()
             .filter_map(|(idx, score)| {
-                if let Some(d) = self.data.get(*idx) {
-                    if let Some(f) = &self.data_file {
-                        match f.lock() {
-                            Ok(mut l) => {
-                                l.seek(std::io::SeekFrom::Start(d.start as u64)).unwrap();
-                                let mut txt = vec![0_u8; d.length];
-                                l.read_exact(&mut txt).unwrap();
-
-                                Some((d, String::from_utf8(txt).unwrap(), *score))
-                            }
-                            Err(e) => {
-                                println!("Error acquiring lock!: {e:?}");
-                                None
-                            }
-                        }
-                    } else {
-                        None
-                    }
+                let idx = *idx;
+                if let Some(d) = self.data.get(idx) {
+                    let txt = self.chunk(d).ok()?;
+                    Some((idx, (d, txt, *score)))
+                    // Some((*idx, d, txt, *score))
                 } else {
                     None
                 }
             })
-            .collect::<Vec<_>>();
+            .collect::<HashMap<_, _>>()
+        } else {
+            return Err(anyhow!("ANN Index not ready!"));
+        };
 
-        Ok(res)
+        let bm25 = self.bm25.as_ref().map(|bm25| {
+            let res = bm25.search(qry_str, top_k * 2);
+            res.iter().map(|r| (r.document.id, r.score)).collect::<HashMap<_, _>>()
+        });
+        
+        let result = ann.into_iter().map(|(idx, (data, txt, score))| {
+
+        })
+        .collect::<Vec<_>>();
+        // println!("{bm25:?}");
+        todo!()
+        // Ok(ann)
     }
 
     /// Given an index `idx` returns `k` adjacent chunks before and after the index
@@ -200,15 +198,17 @@ impl Store {
             FileKind::Html(p) => p.as_path(),
         };
 
-        let mut adjacent_chunks = (start .. end)
-        .filter_map(|index| {
+        let mut chunks: Vec<(String, usize)> = Vec::with_capacity(end - start);
+
+        (start .. end)
+        .for_each(|index| {
             let data = if index == idx {
                 trg_data
             } else if let Some(d) = self.data.get(index) {
                 d
             } else {
                 eprintln!("Nothing found for data point {index}");
-                return None;
+                return;
             };
 
             let src = match &data.file {
@@ -219,26 +219,44 @@ impl Store {
 
             // Not neighbors if indices are not from the same source file
             if src != trg_src {
-                return None;
+                return;
             }
 
+            let txt = if let Ok(txt) = self.chunk(data) {
+                txt
+            } else {
+                return;
+            };
+
+            if !chunks.is_empty() {
+                let i = chunks.len() - 1;
+                chunks[i].0 = if let Ok(t) = dedup_text(&chunks[i].0, &txt) {
+                    t
+                } else {
+                    return;
+                }
+            }
             
-            self.chunk(data).ok().map(|c| (c, index))
-        }).collect::<Vec<_>>();
+            chunks.push((txt, index));
+        });
 
-        // We have the neighbors, lets de-dup them
-        // TODO: figure out de-dup in the same loop as before
-        let mut i = 1;
-        while i < adjacent_chunks.len() {
-            adjacent_chunks[i - 1].0 = dedup_text(&adjacent_chunks[i - 1].0, &adjacent_chunks[i].0)?;
-            i += 1;
-        }
-
-        Ok((
+        // We have deduplicated text, let's prepare them in the before after kind of structure
+        let mut result = (
             vec![],
             String::new(),
             vec![]
-        ))
+        );
+
+        chunks.into_iter().for_each(|(s, i)| {
+            match i.cmp(&idx) {
+                Ordering::Less => result.0.push(s),
+                Ordering::Equal => result.1 = s,
+                Ordering::Greater => result.2.push(s),
+            }
+        });
+        
+
+        Ok(result)
     }
 
     /// Given a datapoint, returns the text chunk for that datapoint
@@ -249,7 +267,7 @@ impl Store {
             return Err(anyhow!("Store not initialized!"));
         };
 
-        let mut f = df.lock().map_err(|e| anyhow!("error acquiring data file lock"))?;
+        let mut f = df.lock().map_err(|e| anyhow!("error acquiring data file lock: {e:?}"))?;
         f.seek(std::io::SeekFrom::Start(data.start as u64))?;
 
         let mut buf = vec![0; data.length];
@@ -272,8 +290,34 @@ impl Store {
     }
 
     fn build_index(&mut self, num_trees: usize, max_size: usize) -> Result<()> {
+        
+        let (ann, bm25) = rayon::join(|| {
+            Self::build_ann(&self.dir.join(EMBED_FILE), num_trees, max_size, self.data.len())
+        }, || {
+            let docs = self.data.iter().enumerate().filter_map(|(idx, d)| {
+                let chunk = match self.chunk(d) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("Error while reading chunk: {e:?}");
+                        return None;
+                    }
+                };
+
+                Some(Document { id: idx, contents: chunk })
+            }).collect::<Vec<_>>();
+
+            Self::build_bm25(docs)
+        });
+
+        self.index = Some(ann?);
+        self.bm25 = Some(bm25?);
+
+        Ok(())
+    }
+
+    fn build_ann(file: &Path, num_trees: usize, max_size: usize, data_len: usize) -> Result<ANNIndex> {
         let tensors = unsafe {
-            safetensors::MmapedSafetensors::new(self.dir.join(EMBED_FILE))?
+            safetensors::MmapedSafetensors::new(file)?
                 .load(EMBED_TENSOR_NAME, &candle_core::Device::Cpu)?
         };
 
@@ -281,10 +325,20 @@ impl Store {
             num_trees,
             max_size,
             &tensors,
-            &(0..self.data.len()).collect::<Vec<_>>(),
+            &(0..data_len).collect::<Vec<_>>(),
         )?;
-        self.index = Some(ann);
-        Ok(())
+
+        Ok(ann)
+    }
+
+    fn build_bm25(docs: Vec<Document<usize>>) -> Result<SearchEngine<usize>> {
+        let engine = SearchEngineBuilder::<usize>::with_documents(
+            Language::English,
+            docs,
+        )
+        .build();
+
+        Ok(engine)
     }
 }
 
@@ -376,11 +430,11 @@ mod tests {
             .query("What are the latest news about Iraq?")?
             .to_device(&candle_core::Device::Cpu)?;
 
-        let res = store.search(&qry, 4, Some(0.4))?;
+        let res = store.search(&qry, "What are the latest news about Iraq?", 8, Some(0.36))?;
 
         println!("Response length: {}", res.len());
-        res.iter().for_each(|(_, txt, score)| {
-            println!("Match score[{score}] ----------\n{txt}\n------------------\n")
+        res.iter().for_each(|(idx, _, txt, score)| {
+            println!("Match[{idx}] score[{score}] ----------\n{txt}\n------------------\n")
         });
         Ok(())
     }
