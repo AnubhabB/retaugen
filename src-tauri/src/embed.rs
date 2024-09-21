@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::{anyhow, Result};
 use candle_core::{DType, Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use text_splitter::{ChunkConfig, MarkdownSplitter};
 use tokenizers::{
     EncodeInput, Encoding, PaddingDirection, PaddingParams, PaddingStrategy, Tokenizer,
@@ -16,14 +17,6 @@ pub struct Embed {
     model: crate::stella::Stella,
     tokenizer: Tokenizer,
     splitter: MarkdownSplitter<Tokenizer>,
-}
-
-pub enum ForEmbed<'a, T>
-where
-    T: Into<EncodeInput<'a>> + Clone,
-{
-    Query(&'a str),
-    Docs(&'a [T]),
 }
 
 impl Embed {
@@ -83,42 +76,17 @@ impl Embed {
     }
 
     // Prepends `prompt` template and tokenizes a `query`
-    pub fn query(&mut self, query: &str) -> Result<Tensor> {
-        let tokens = self.tokenize(
-            ForEmbed::<&str>::Query(
-                    format!("Instruct: Given a web search query, retrieve relevant passages that answer the query.\nQuery:{query}").as_str()
-                )
-            )?;
+    pub fn query(&mut self, query_batch: &[String]) -> Result<Tensor> {
+        let q = query_batch
+            .par_iter().map(|q| format!("Instruct: Given a web search query, retrieve relevant passages that answer the query.\nQuery:{q}"))
+            .collect::<Vec<_>>();
 
-        let ids = Tensor::from_iter(
-            tokens[0]
-                .get_ids()
-                .get(0..tokens[0].get_ids().len().min(512))
-                .unwrap()
-                .to_vec(),
-            &self.device,
-        )?
-        .unsqueeze(0)?;
-        let mask = Tensor::from_iter(
-            tokens[0]
-                .get_attention_mask()
-                .get(0..tokens[0].get_attention_mask().len().min(512))
-                .unwrap()
-                .to_vec(),
-            &self.device,
-        )?
-        .unsqueeze(0)?
-        .to_dtype(DType::U8)?;
-
-        Ok(self.model.forward(&ids, &mask, 0)?)
+        self.embeddings(&q)
     }
 
     // Tokenizes a doc text batch
-    pub fn embeddings<'a, T: Into<EncodeInput<'a>> + Clone + Send>(
-        &mut self,
-        doc_batch: ForEmbed<'a, T>,
-    ) -> Result<Tensor> {
-        let mut token_batch = self.tokenize(doc_batch)?;
+    pub fn embeddings(&mut self, batch: &[String]) -> Result<Tensor> {
+        let mut token_batch = self.tokenize(batch)?;
         let mut ids = Tensor::zeros(
             (token_batch.len(), token_batch[0].get_ids().len()),
             DType::U32,
@@ -152,7 +120,9 @@ impl Embed {
         splits
             .chunks(Config::STELLA_MAX_BATCH)
             .flat_map(|c| {
-                let embed = self.embeddings(ForEmbed::Docs(c)).ok()?;
+                let embed = self
+                    .embeddings(&c.iter().map(|c| c.to_string()).collect::<Vec<_>>()[..])
+                    .ok()?;
                 Some(
                     c.iter()
                         .enumerate()
@@ -170,20 +140,10 @@ impl Embed {
             .collect::<Vec<_>>()
     }
 
-    fn tokenize<'a, T: Into<EncodeInput<'a>> + Clone + Send>(
-        &self,
-        doc: ForEmbed<'a, T>,
-    ) -> Result<Vec<Encoding>> {
-        match doc {
-            ForEmbed::Query(q) => Ok(vec![self
-                .tokenizer
-                .encode(q, true)
-                .map_err(|e| anyhow!(e))?]),
-            ForEmbed::Docs(d) => self
-                .tokenizer
-                .encode_batch(d.to_vec(), true)
-                .map_err(|e| anyhow!(e)),
-        }
+    fn tokenize(&self, doc: &[String]) -> Result<Vec<Encoding>> {
+        self.tokenizer
+            .encode_batch(doc.to_vec(), true)
+            .map_err(|e| anyhow!(e))
     }
 }
 
@@ -199,11 +159,11 @@ mod tests {
     fn basic_similarity() -> Result<()> {
         let mut embed = Embed::new(Path::new("../models"))?;
 
-        let qry = embed.query("What are some ways to reduce stress?")?; // [1, 1024]
-        let docs = embed.embeddings(crate::embed::ForEmbed::Docs(&[
+        let qry = embed.query(&["What are some ways to reduce stress?".to_string()])?; // [1, 1024]
+        let docs = embed.embeddings(&[
             "There are many effective ways to reduce stress. Some common techniques include deep breathing, meditation, and physical activity. Engaging in hobbies, spending time in nature, and connecting with loved ones can also help alleviate stress. Additionally, setting boundaries, practicing self-care, and learning to say no can prevent stress from building up.".to_string(),
             "Green tea has been consumed for centuries and is known for its potential health benefits. It contains antioxidants that may help protect the body against damage caused by free radicals. Regular consumption of green tea has been associated with improved heart health, enhanced cognitive function, and a reduced risk of certain types of cancer. The polyphenols in green tea may also have anti-inflammatory and weight loss properties.".to_string(),
-        ]))?; // [2, 1024]
+        ])?; // [2, 1024]
 
         // a matmul should do the trick
         let res = qry.matmul(&docs.t()?)?;

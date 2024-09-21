@@ -34,13 +34,12 @@ pub fn dedup_text(prev: &str, current: &str) -> Result<String> {
         pointer -= 1;
     }
 
-    Ok(std::str::from_utf8(&prv[0 .. prv.len() - pointer])?.to_string())
+    Ok(std::str::from_utf8(&prv[0..prv.len() - pointer])?.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::dedup_text;
-
 
     #[test]
     fn test_dedup_text() {

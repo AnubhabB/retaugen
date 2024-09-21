@@ -1,13 +1,23 @@
+use core::f32;
 use std::{
-    cmp::Ordering, collections::HashMap, fs::{self, File, OpenOptions}, io::{BufReader, Read, Seek, Write}, path::{Path, PathBuf}, sync::{Arc, Mutex}
+    cmp::Ordering,
+    fs::{self, File, OpenOptions},
+    io::{BufReader, Read, Seek, Write},
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 use anyhow::{anyhow, Result};
 use bm25::{Document, Language, SearchEngine, SearchEngineBuilder};
 use candle_core::{safetensors, Tensor};
+use dashmap::DashMap;
+use rayon::{
+    iter::{IntoParallelRefIterator, ParallelIterator},
+    slice::ParallelSliceMut,
+};
 use serde::{Deserialize, Serialize};
 
-use crate::{ann::ANNIndex, docs, utils::dedup_text};
+use crate::{ann::ANNIndex, utils::dedup_text};
 
 const EMBED_FILE: &str = "embed.data";
 const TEXT_FILE: &str = "text.data";
@@ -29,7 +39,7 @@ pub struct Store {
     #[serde(skip)]
     index: Option<ANNIndex>,
     #[serde(skip)]
-    bm25: Option<SearchEngine<usize>>
+    bm25: Option<SearchEngine<usize>>,
 }
 
 /// in `struct Data` we maintain the source file of the data and along with it the chunk of text being indexed
@@ -139,47 +149,140 @@ impl Store {
     /// API for search into the index
     pub fn search(
         &self,
-        qry: &Tensor,
-        qry_str: &str,
+        qry: &[Tensor],
+        qry_str: &[String],
         top_k: usize,
         ann_cutoff: Option<f32>,
     ) -> Result<Vec<(usize, &Data, String, f32)>> {
-        let ann = if let Some(idx) = &self.index {
-            idx
-            .search_approximate(qry, top_k, ann_cutoff)?
-            .iter()
-            .filter_map(|(idx, score)| {
-                let idx = *idx;
-                if let Some(d) = self.data.get(idx) {
-                    let txt = self.chunk(d).ok()?;
-                    Some((idx, (d, txt, *score)))
-                    // Some((*idx, d, txt, *score))
-                } else {
-                    None
+        // Giving 75% weightage to the ANN search and 25% to BM25 search
+        const ALPHA: f32 = 0.75;
+
+        // Let's get the ANN scores and BM25 scores in parallel
+        let (ann, bm25) = rayon::join(
+            || {
+                let ann = DashMap::new();
+                if let Some(index) = &self.index {
+                    qry.par_iter().for_each(|q| {
+                        let res = match index.search_approximate(q, top_k * 4, ann_cutoff) {
+                            Ok(d) => d,
+                            Err(e) => {
+                                eprintln!("Error in search_approximate: {e}");
+                                return;
+                            }
+                        };
+
+                        res.iter().for_each(|(idx, score)| {
+                            let idx = *idx;
+                            if let Some(d) = self.data.get(idx) {
+                                let txt = if let Ok(c) = self.chunk(d) {
+                                    c
+                                } else {
+                                    return;
+                                };
+
+                                let mut e = ann.entry(idx).or_insert((d, txt, *score));
+                                if e.2 < *score {
+                                    e.2 = *score;
+                                }
+                            }
+                        });
+                    });
                 }
-            })
-            .collect::<HashMap<_, _>>()
+
+                ann
+            },
+            || {
+                let bm25 = DashMap::new();
+                if let Some(b) = self.bm25.as_ref() {
+                    qry_str.par_iter().for_each(|qs| {
+                        let res = b.search(qs, top_k * 4);
+                        res.par_iter().for_each(|r| {
+                            let mut e = bm25.entry(r.document.id).or_insert(r.score);
+
+                            if *e < r.score {
+                                *e = r.score;
+                            }
+                        });
+                    });
+                };
+
+                bm25
+            },
+        );
+
+        // Now, we have the highest ANN and BM25 scores for the set of queries
+        // We'll need to create a `combined` score of the two
+        // Based on https://github.com/NirDiamant/RAG_Techniques/blob/main/all_rag_techniques_runnable_scripts/fusion_retrieval.py
+        // the steps are:
+        // 1. Normalize the vector search score
+        // 2. Normalize the bm25 score
+        // 3. combined_scores = some alpha * vector_scores + (1 - alpha) * bm25_scores
+
+        // To normalize the ANN Scores, let's go ahead and get the Max/ Min
+        let mut ann_max = 0_f32;
+        let mut ann_min = f32::MAX;
+
+        ann.iter().for_each(|j| {
+            ann_max = j.2.max(ann_max);
+            ann_min = j.2.min(ann_min);
+        });
+
+        let ann_div = ann_max - ann_min;
+
+        // And same for bm25 scores
+        let mut bm25_max = 0_f32;
+        let mut bm25_min = f32::MAX;
+
+        let has_bm_25 = !bm25.is_empty();
+
+        let bm25_div = if has_bm_25 {
+            bm25.iter().for_each(|j| {
+                bm25_max = j.max(bm25_max);
+                bm25_min = j.min(bm25_min);
+            });
+
+            bm25_max - bm25_min
         } else {
-            return Err(anyhow!("ANN Index not ready!"));
+            f32::MIN
         };
 
-        let bm25 = self.bm25.as_ref().map(|bm25| {
-            let res = bm25.search(qry_str, top_k * 2);
-            res.iter().map(|r| (r.document.id, r.score)).collect::<HashMap<_, _>>()
-        });
-        
-        let result = ann.into_iter().map(|(idx, (data, txt, score))| {
+        // Ok, to time to normalize our scores and create a combined score for each of them
+        let mut combined = ann
+            .par_iter()
+            .map(|j| {
+                let id = *j.key();
+                let ann_score = 1. - (j.2 - ann_min) / ann_div;
+                let bm25_score = if has_bm_25 {
+                    let bm25_score = if let Some(b) = bm25.get(&id) {
+                        (*b - bm25_min) / bm25_div
+                    } else {
+                        // Some very small number if not present
+                        0.
+                    };
 
-        })
-        .collect::<Vec<_>>();
-        // println!("{bm25:?}");
-        todo!()
-        // Ok(ann)
+                    bm25_score
+                } else {
+                    0.
+                };
+
+                let combined = ALPHA * ann_score + (1. - ALPHA) * bm25_score;
+
+                (id, j.0, j.1.clone(), combined)
+            })
+            .collect::<Vec<_>>();
+
+        combined.par_sort_unstable_by(|a, b| b.3.total_cmp(&a.3));
+
+        Ok(combined[0..top_k.min(combined.len())].to_vec())
     }
 
     /// Given an index `idx` returns `k` adjacent chunks before and after the index
     /// Returns k text blocks before with overlap removed, the current text with overlap removed and k text blocks after, again overlap removed
-    pub fn with_k_adjacent(&self, idx: usize, k: usize) -> Result<(Vec<String>, String, Vec<String>)> {
+    pub fn with_k_adjacent(
+        &self,
+        idx: usize,
+        k: usize,
+    ) -> Result<(Vec<String>, String, Vec<String>)> {
         // Let's collect all indices that need to be fethed
         // We have to ensure indices that are in the SAME source file
         let start = if k > idx { 0 } else { idx - k };
@@ -189,7 +292,7 @@ impl Store {
             d
         } else {
             eprintln!("Nothing found for index {idx}. Corrupt store!");
-            return Err(anyhow!("corrupt store!"))
+            return Err(anyhow!("corrupt store!"));
         };
 
         let trg_src = match &trg_data.file {
@@ -200,8 +303,7 @@ impl Store {
 
         let mut chunks: Vec<(String, usize)> = Vec::with_capacity(end - start);
 
-        (start .. end)
-        .for_each(|index| {
+        (start..end).for_each(|index| {
             let data = if index == idx {
                 trg_data
             } else if let Some(d) = self.data.get(index) {
@@ -236,25 +338,18 @@ impl Store {
                     return;
                 }
             }
-            
+
             chunks.push((txt, index));
         });
 
         // We have deduplicated text, let's prepare them in the before after kind of structure
-        let mut result = (
-            vec![],
-            String::new(),
-            vec![]
-        );
+        let mut result = (vec![], String::new(), vec![]);
 
-        chunks.into_iter().for_each(|(s, i)| {
-            match i.cmp(&idx) {
-                Ordering::Less => result.0.push(s),
-                Ordering::Equal => result.1 = s,
-                Ordering::Greater => result.2.push(s),
-            }
+        chunks.into_iter().for_each(|(s, i)| match i.cmp(&idx) {
+            Ordering::Less => result.0.push(s),
+            Ordering::Equal => result.1 = s,
+            Ordering::Greater => result.2.push(s),
         });
-        
 
         Ok(result)
     }
@@ -267,7 +362,9 @@ impl Store {
             return Err(anyhow!("Store not initialized!"));
         };
 
-        let mut f = df.lock().map_err(|e| anyhow!("error acquiring data file lock: {e:?}"))?;
+        let mut f = df
+            .lock()
+            .map_err(|e| anyhow!("error acquiring data file lock: {e:?}"))?;
         f.seek(std::io::SeekFrom::Start(data.start as u64))?;
 
         let mut buf = vec![0; data.length];
@@ -289,25 +386,41 @@ impl Store {
         Ok((text, embed))
     }
 
+    // We break apart the index builders to separate functions and build the ANN and BM25 index in parallel
     fn build_index(&mut self, num_trees: usize, max_size: usize) -> Result<()> {
-        
-        let (ann, bm25) = rayon::join(|| {
-            Self::build_ann(&self.dir.join(EMBED_FILE), num_trees, max_size, self.data.len())
-        }, || {
-            let docs = self.data.iter().enumerate().filter_map(|(idx, d)| {
-                let chunk = match self.chunk(d) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        eprintln!("Error while reading chunk: {e:?}");
-                        return None;
-                    }
-                };
+        let (ann, bm25) = rayon::join(
+            || {
+                Self::build_ann(
+                    &self.dir.join(EMBED_FILE),
+                    num_trees,
+                    max_size,
+                    self.data.len(),
+                )
+            },
+            || {
+                let docs = self
+                    .data
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, d)| {
+                        let chunk = match self.chunk(d) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                eprintln!("Error while reading chunk: {e:?}");
+                                return None;
+                            }
+                        };
 
-                Some(Document { id: idx, contents: chunk })
-            }).collect::<Vec<_>>();
+                        Some(Document {
+                            id: idx,
+                            contents: chunk,
+                        })
+                    })
+                    .collect::<Vec<_>>();
 
-            Self::build_bm25(docs)
-        });
+                Self::build_bm25(docs)
+            },
+        );
 
         self.index = Some(ann?);
         self.bm25 = Some(bm25?);
@@ -315,7 +428,13 @@ impl Store {
         Ok(())
     }
 
-    fn build_ann(file: &Path, num_trees: usize, max_size: usize, data_len: usize) -> Result<ANNIndex> {
+    // Builds the ANN index
+    fn build_ann(
+        file: &Path,
+        num_trees: usize,
+        max_size: usize,
+        data_len: usize,
+    ) -> Result<ANNIndex> {
         let tensors = unsafe {
             safetensors::MmapedSafetensors::new(file)?
                 .load(EMBED_TENSOR_NAME, &candle_core::Device::Cpu)?
@@ -331,12 +450,9 @@ impl Store {
         Ok(ann)
     }
 
+    // Builds the BM25 index
     fn build_bm25(docs: Vec<Document<usize>>) -> Result<SearchEngine<usize>> {
-        let engine = SearchEngineBuilder::<usize>::with_documents(
-            Language::English,
-            docs,
-        )
-        .build();
+        let engine = SearchEngineBuilder::<usize>::with_documents(Language::English, docs).build();
 
         Ok(engine)
     }
@@ -383,7 +499,7 @@ mod tests {
                     .map(|t| format!("## {}\n{}", t.title, t.text))
                     .collect::<Vec<_>>();
 
-                if let Ok(e) = embed.embeddings(crate::embed::ForEmbed::Docs(&batch)) {
+                if let Ok(e) = embed.embeddings(&batch) {
                     let data = batch
                         .par_iter()
                         .enumerate()
@@ -427,10 +543,21 @@ mod tests {
 
         let mut embed = Embed::new(Path::new("../models"))?;
         let qry = embed
-            .query("What are the latest news about Iraq?")?
+            .query(&[
+                "What are the latest news about Iraq?".to_string(),
+                "Latest news on ISIS in Iraq?".to_string(),
+                "Iraq news and current events".to_string(),
+            ])?
             .to_device(&candle_core::Device::Cpu)?;
 
-        let res = store.search(&qry, "What are the latest news about Iraq?", 8, Some(0.36))?;
+        let b = qry.dims2()?.0;
+        let qry = (0..b)
+            .filter_map(|i| qry.get(i).ok().and_then(|t| t.unsqueeze(0).ok()))
+            .collect::<Vec<_>>();
+
+        qry.iter().for_each(|q| println!("{:?}", q.shape()));
+
+        let res = store.search(&qry[..], &["Iraq".to_string()], 8, Some(0.36))?;
 
         println!("Response length: {}", res.len());
         res.iter().for_each(|(idx, _, txt, score)| {

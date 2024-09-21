@@ -125,6 +125,8 @@ pub struct QueryMore {
     #[serde(rename = "sub_queries")]
     more: Vec<String>,
     topic: String,
+    #[serde(rename = "common_nouns")]
+    keywords: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -176,10 +178,11 @@ impl Generator {
     /// Preprocesses a query to generate `topic` and supplimental queries for `Fusion Retrieval`
     pub fn query_preproc(&mut self, query: &str, num_sub_qry: usize) -> Result<QueryMore> {
         let prompt = format!(
-"<|start_header_id|>system<|end_header_id|>\n\nThis is a query generation system for Fusion Retrieval. It generates relevant sub-queries related to a given source query.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nGiven a source query that may require additional context or specific information, generate relevant sub-queries to retrieve more accurate results. Identify a word or a very short phrase that represents the topic of the `Query`.\n\n\nSource Query:\n{query}\n\nGenerate {num_sub_qry} relevant sub-queries that:\n\n- Are closely related to the source query\n- Can be used to retrieve additional context or specific information\n- Are concise and clear\n\n\nRequirements:\n\n- Sub-queries should not repeat the source query\n- Sub-queries should be relevant to the source query's intent, purpose and context\n- use natural language\n- your answer should be a valid json of the following schema.\n\n\nSchema:\n\n
+"<|start_header_id|>system<|end_header_id|>\n\nThis is a query generation system for Fusion Retrieval. It generates relevant sub-queries related to a given source query.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nGiven a source query that may require additional context or specific information, generate relevant sub-queries to retrieve more accurate results. Identify a word or a very short phrase that represents the topic of the query. List the \"common nouns\" (object, person or place) in the source query or sub-queries that can be used for a keyword search.\n\n\nSource Query:\n{query}\n\nGenerate {num_sub_qry} relevant sub-queries that:\n\n- Are closely related to the source query\n- Can be used to retrieve additional context or specific information\n- Are concise and clear\n\n\nRequirements:\n\n- Sub-queries should not repeat the source query\n- Sub-queries should be relevant to the source query's intent, purpose and context\n- use natural language for sub queries\n- your answer should be a valid json of the following schema.\n\n\nSchema:\n\n
 {{
   sub_queries: Array<string>,
-  topic: string
+  topic: string,
+  common_nouns: Array<string> - return empty array if not found
 }}\n\nAnswer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{{\n  \"sub_queries\": [\""
         );
 

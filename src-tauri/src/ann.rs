@@ -196,10 +196,7 @@ impl ANNIndex {
             })
             .collect::<Vec<_>>();
 
-        res.par_sort_unstable_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .map_or(std::cmp::Ordering::Equal, |o| o)
-        });
+        res.par_sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
 
         Ok(res[0..top_k.min(res.len())].to_vec())
     }
@@ -236,7 +233,7 @@ mod tests {
         let chunks = data.chunks(Config::STELLA_MAX_BATCH).take(NUM_CHUNKS);
         let mut all_tensors = vec![];
         for c in chunks {
-            if let Ok(e) = embed.embeddings(crate::embed::ForEmbed::Docs(c)) {
+            if let Ok(e) = embed.embeddings(c) {
                 all_tensors.push(e);
             } else {
                 continue;
@@ -254,7 +251,7 @@ mod tests {
         )?;
 
         println!("Indexed!!");
-        let qry = embed.query("What are the latest news about Iraq?")?;
+        let qry = embed.query(&["What are the latest news about Iraq?".to_string()])?;
         let res = store.search_approximate(&qry, 4, Some(0.35))?;
 
         println!("Found matches: {}", res.len());
