@@ -1,40 +1,50 @@
-use std::{fs::create_dir_all, path::{Path, PathBuf}, sync::Arc};
+use std::{
+    fs::create_dir_all,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::Result;
-use tauri::async_runtime::{self, channel, Receiver, RwLock, Sender};
+use tauri::async_runtime::{self, channel, Mutex, Receiver, RwLock, Sender};
 
-use crate::{docs::files_to_text, store::Store};
+use crate::{docs::files_to_text, embed::Embed, stella, store::Store};
 
 pub enum Event {
     Search(String),
-    Index(PathBuf)
+    Index(PathBuf),
 }
 
 #[derive(Clone)]
 pub struct App {
-    dir: PathBuf,
     send: Sender<Event>,
-    store: Arc<RwLock<Store>>
+    store: Arc<RwLock<Store>>,
+    embed: Arc<Mutex<Embed>>,
+    appdir: PathBuf,
+    modeldir: PathBuf,
 }
 
 impl App {
     /// Create a new instance of the app
-    pub fn new(appdir: &Path) -> Result<Self> {
-        println!("{appdir:?}");
+    pub fn new(appdir: &Path, models_dir: &Path) -> Result<Self> {
         let storage_dir = appdir.join("store");
         if !storage_dir.is_dir() {
             create_dir_all(&storage_dir)?;
         }
 
         let (send, recv) = channel(100);
-        let store = Arc::new(
-            RwLock::new(Store::load_from_file(storage_dir.as_path(), None, None)?)
-        );
+        let store = Arc::new(RwLock::new(Store::load_from_file(
+            storage_dir.as_path(),
+            None,
+            None,
+        )?));
+        let embed = Arc::new(Mutex::new(Embed::new(Path::new("../models"))?));
 
         let app = Self {
-            dir: storage_dir.to_path_buf(),
             send,
-            store
+            store,
+            embed,
+            appdir: appdir.to_path_buf(),
+            modeldir: models_dir.to_path_buf(),
         };
 
         let arced = Arc::new(app.clone());
@@ -68,34 +78,57 @@ impl App {
 
     // Triggers indexing workflow
     async fn index(&self, path: &Path) -> Result<()> {
+        println!("Initializing indexing ..");
         let mut to_index = vec![];
         // Create list of files
-        path.read_dir()?.filter_map(|f| {
-            if let Ok(p) = f {
-                if p.metadata()
-                .map_or( false,|f| {
-                    f.is_file()
-                }) {
-                    Some(p)
+        path.read_dir()?
+            .filter_map(|f| {
+                if let Ok(p) = f {
+                    if p.metadata().map_or(false, |f| f.is_file()) {
+                        Some(p)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
-            } else {
-                None
-            }
-        }).for_each(|f| {
-            let path = f.path();
-            if let Some(ext) = path.extension() {
-                if ext == "txt" || ext == "pdf" {
-                    to_index.push(path);
+            })
+            .for_each(|f| {
+                let path = f.path();
+                if let Some(ext) = path.extension() {
+                    if ext == "txt" || ext == "pdf" {
+                        to_index.push(path);
+                    }
                 }
-            }
+            });
+
+        println!("Found {} files to index", to_index.len());
+
+        let f2t = files_to_text(self.modeldir.as_path(), &to_index[..])?.concat();
+
+        println!(
+            "Text exteacion done.. {} text blocks. Begin split and encode ..",
+            f2t.len()
+        );
+
+        let mut embed = self.embed.lock().await;
+
+        let mut data = f2t.iter().flat_map(|(txt, f)| {
+            let t = embed
+                .split_text_and_encode(txt)
+                .iter()
+                .map(|(s, t)| (s.to_owned(), t.to_owned(), f.to_owned()))
+                .collect::<Vec<_>>();
+            t
         });
 
-        let data = files_to_text(&to_index[..])?.concat();
+        let mut writer = self.store.write().await;
+        let (mut f, _) = writer.files()?;
 
-        let writer = self.store.write().await;
-        // writer.
+        writer.insert(&mut f, &mut data)?;
+
+        println!("Indexing done ..");
+
         Ok(())
     }
 }

@@ -623,7 +623,7 @@ dependencies = [
 [[package]]
 name = "candle-core"
 version = "0.7.1"
-source = "git+https://github.com/huggingface/candle.git#8097559c1a293d26cf9cd65d92d9cb4696197c2e"
+source = "git+https://github.com/huggingface/candle.git#d01207dbf3fb0ad614e7915c8f5706fbc09902fb"
 dependencies = [
  "byteorder",
  "candle-metal-kernels",
@@ -645,7 +645,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.7.1"
-source = "git+https://github.com/huggingface/candle.git#8097559c1a293d26cf9cd65d92d9cb4696197c2e"
+source = "git+https://github.com/huggingface/candle.git#d01207dbf3fb0ad614e7915c8f5706fbc09902fb"
 dependencies = [
  "metal",
  "once_cell",
@@ -656,7 +656,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.7.1"
-source = "git+https://github.com/huggingface/candle.git#8097559c1a293d26cf9cd65d92d9cb4696197c2e"
+source = "git+https://github.com/huggingface/candle.git#d01207dbf3fb0ad614e7915c8f5706fbc09902fb"
 dependencies = [
  "candle-core",
  "candle-metal-kernels",
@@ -672,7 +672,7 @@ dependencies = [
 [[package]]
 name = "candle-transformers"
 version = "0.7.1"
-source = "git+https://github.com/huggingface/candle.git#8097559c1a293d26cf9cd65d92d9cb4696197c2e"
+source = "git+https://github.com/huggingface/candle.git#d01207dbf3fb0ad614e7915c8f5706fbc09902fb"
 dependencies = [
  "byteorder",
  "candle-core",
@@ -3674,9 +3674,9 @@ checksum = "ad78bf43dcf80e8f950c92b84f938a0fc7590b7f6866fbcbeca781609c115590"
 
 [[package]]
 name = "pkg-config"
-version = "0.3.30"
+version = "0.3.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d231b230927b5e4ad203db57bbcbee2802f6bce620b1e4a9024a07d94e2907ec"
+checksum = "953ec861398dccce10c670dfeaf3ec4911ca479e9c02154b3a215178c5f566f2"
 
 [[package]]
 name = "plist"

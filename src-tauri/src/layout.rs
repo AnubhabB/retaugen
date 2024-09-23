@@ -1,7 +1,7 @@
 // This file is heavily copied from https://github.com/styrowolf/layoutparser-ort/blob/master/src/models/detectron2.rs Licensed Apache 2.0
 // Simplified for our case
 
-use std::fmt::Display;
+use std::{fmt::Display, path::Path};
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
@@ -79,13 +79,13 @@ impl Detectron2Model {
     /// Default confidence threshold for detections.
     pub const DEFAULT_CONFIDENCE_THRESHOLD: f32 = 0.8;
 
-    pub fn new() -> Result<Self> {
+    pub fn new(path: &Path) -> Result<Self> {
         // Loading and initializing the model from `onnx` file
         let model = Session::builder()?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
             // We could make this a little more generic with `numcpus` crate
             .with_intra_threads(8)?
-            .commit_from_file("../models/layout.onnx")?;
+            .commit_from_file(path.join("layout.onnx"))?;
 
         // You could print the model outputs to figure out which prediction datapoints are useful
         // println!("{:?}", model.outputs);
@@ -212,13 +212,15 @@ impl Detectron2Model {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use anyhow::Result;
 
     use super::Detectron2Model;
 
     #[test]
     fn single_page_layout() -> Result<()> {
-        let d2model = Detectron2Model::new()?;
+        let d2model = Detectron2Model::new(Path::new("../models"))?;
         let img = image::open("../test-data/paper-image.jpg")?;
 
         let pred = d2model.predict(&img)?;

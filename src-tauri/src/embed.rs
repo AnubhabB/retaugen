@@ -5,9 +5,7 @@ use candle_core::{DType, Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use text_splitter::{ChunkConfig, MarkdownSplitter};
-use tokenizers::{
-    EncodeInput, Encoding, PaddingDirection, PaddingParams, PaddingStrategy, Tokenizer,
-};
+use tokenizers::{Encoding, PaddingDirection, PaddingParams, PaddingStrategy, Tokenizer};
 
 use crate::{stella::Config, utils::select_device};
 

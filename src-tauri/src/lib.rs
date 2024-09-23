@@ -1,4 +1,7 @@
-use std::{path::PathBuf, str::FromStr};
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use anyhow::Result;
 use app::App;
@@ -16,19 +19,15 @@ mod utils;
 
 // Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
 #[tauri::command]
-async fn index(
-    app: tauri::State<'_, App>,
-    dir: &str
-) -> Result<(), String> {
+async fn index(app: tauri::State<'_, App>, dir: &str) -> Result<(), String> {
     let selected = PathBuf::from_str(dir).map_err(|e| e.to_string())?;
     if !selected.is_dir() {
         return Err(format!("Selected `{dir}` is not a valid directory"));
     }
 
-    app.send(
-        app::Event::Index(selected)
-    ).await
-    .map_err(|e| e.to_string())?;
+    app.send(app::Event::Index(selected))
+        .await
+        .map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -41,7 +40,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             // init our app
-            let state = App::new(app.path().app_data_dir()?.as_path())?;
+            let state = App::new(app.path().app_data_dir()?.as_path(), Path::new("../models"))?;
             app.manage(state);
 
             Ok(())

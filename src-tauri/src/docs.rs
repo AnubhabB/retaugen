@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::{
+    fs::read_to_string,
+    path::{Path, PathBuf},
+};
 
 use anyhow::Result;
 use pdfium_render::prelude::{PdfRect, PdfRenderConfig, Pdfium};
@@ -13,29 +16,35 @@ use crate::{
 const PADDING: f32 = 1.;
 
 // Given a list of files, group them by file types supported - `.pdf` & `.txt` for now and call their respective extraction flow
-pub fn files_to_text(files: &[PathBuf]) -> Result<Vec<Vec<(String, FileKind)>>> {
+pub fn files_to_text(models_dir: &Path, files: &[PathBuf]) -> Result<Vec<Vec<(String, FileKind)>>> {
     let mut pdfs = vec![];
+    let mut txts = vec![];
 
     files.iter().for_each(|f| {
         if let Some(ext) = f.extension() {
             if ext == "pdf" {
                 pdfs.push(f);
+            } else if ext == "txt" {
+                txts.push(f);
             }
         }
     });
 
     let mut results = vec![];
     if !pdfs.is_empty() {
-        results = [&results, &pdf_to_text(&pdfs[..])?[..]].concat();
+        results = [&results, &pdf_to_text(models_dir, &pdfs[..])?[..]].concat();
+    }
+    if !txts.is_empty() {
+        results = [&results, &txt_to_text(&txts[..])?[..]].concat();
     }
 
     Ok(results)
 }
 
 // Reads text from each `.pdf` file and returns the text per page for the file
-pub fn pdf_to_text(files: &[&PathBuf]) -> Result<Vec<Vec<(String, FileKind)>>> {
+pub fn pdf_to_text(models_dir: &Path, files: &[&PathBuf]) -> Result<Vec<Vec<(String, FileKind)>>> {
     // Initializing the layout detection model
-    let layout_model = Detectron2Model::new()?;
+    let layout_model = Detectron2Model::new(models_dir)?;
 
     // Initialize `pdfium` linking it `dynamically`
     // the env `PDFIUM_DYNAMIC_LIB_PATH` is what we had defined in `src-tauri/.cargo/config.toml`
@@ -124,6 +133,20 @@ pub fn pdf_to_text(files: &[&PathBuf]) -> Result<Vec<Vec<(String, FileKind)>>> {
     Ok(file_encoded)
 }
 
+// Reads text from each `.pdf` file and returns the text per page for the file
+pub fn txt_to_text(files: &[&PathBuf]) -> Result<Vec<Vec<(String, FileKind)>>> {
+    let d = files
+        .iter()
+        .filter_map(|f| {
+            let txt = read_to_string(f.as_path()).ok()?;
+
+            Some(vec![(txt, FileKind::Text(f.to_path_buf()))])
+        })
+        .collect::<Vec<_>>();
+
+    Ok(d)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -135,7 +158,7 @@ mod tests {
     #[test]
     fn extract_from_pdf() -> Result<()> {
         let files = &[Path::new("../test-data/prehistory/archaeology.pdf").to_path_buf()];
-        let results = files_to_text(files)?;
+        let results = files_to_text(Path::new("../models"), files)?;
 
         assert!(!results.is_empty());
 
