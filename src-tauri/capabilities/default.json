@@ -9,6 +9,10 @@
     "core:default",
     "shell:allow-open",
     "fs:allow-home-read-recursive",
-    "fs:allow-app-write-recursive"
+    "fs:allow-app-write-recursive",
+    "dialog:allow-ask",
+    "dialog:allow-confirm",
+    "dialog:allow-save",
+    "dialog:allow-open"
   ]
 }

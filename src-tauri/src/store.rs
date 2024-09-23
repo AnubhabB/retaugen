@@ -78,7 +78,11 @@ impl Store {
                 dir.join(TEXT_FILE),
             )?))));
 
-            store.build_index(num_trees.map_or(16, |n| n), max_size.map_or(16, |sz| sz))?;
+            if let Ok(m) = dir.join(EMBED_FILE).metadata() {
+                if m.len() > 0 {
+                    store.build_index(num_trees.map_or(16, |n| n), max_size.map_or(16, |sz| sz))?;
+                }
+            }
 
             store
         } else {
