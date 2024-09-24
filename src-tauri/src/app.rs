@@ -1,13 +1,12 @@
 use std::{
-    fs::create_dir_all,
-    path::{Path, PathBuf},
-    sync::Arc,
+    fs::create_dir_all, path::{Path, PathBuf}, sync::Arc
 };
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use candle_core::IndexOp;
 use tauri::async_runtime::{self, channel, Mutex, Receiver, RwLock, Sender};
 
-use crate::{docs::files_to_text, embed::Embed, stella, store::Store};
+use crate::{docs::files_to_text, embed::Embed, gen::Generator, store::Store, utils::select_device};
 
 pub enum Event {
     Search(String),
@@ -16,6 +15,7 @@ pub enum Event {
 
 #[derive(Clone)]
 pub struct App {
+    gen: Arc<Mutex<Option<Generator>>>,
     send: Sender<Event>,
     store: Arc<RwLock<Store>>,
     embed: Arc<Mutex<Embed>>,
@@ -40,6 +40,7 @@ impl App {
         let embed = Arc::new(Mutex::new(Embed::new(Path::new("../models"))?));
 
         let app = Self {
+            gen: Arc::new(Mutex::new(None)),
             send,
             store,
             embed,
@@ -65,7 +66,9 @@ impl App {
         while let Some(evt) = recv.recv().await {
             match evt {
                 Event::Search(qry) => {
-                    println!("Query: {qry}");
+                    if let Err(e) = app.search(&qry).await {
+                        eprintln!("Error while searching: {e:?}");
+                    }
                 }
                 Event::Index(dir) => {
                     if let Err(e) = app.index(dir.as_path()).await {
@@ -76,8 +79,58 @@ impl App {
         }
     }
 
+    // Trigger the search flow - the search pipeline
+    async fn search(&self, qry: &str) -> Result<()> {
+        let mut gen = self.gen.lock().await;
+        if gen.is_none() {
+            println!("Loading generator ..");
+            *gen = Some(Generator::new(&self.modeldir, &select_device()?)?)
+        }
+
+        let llm = if let Some(gen) = gen.as_mut() {
+            gen
+        } else {
+            return Err(anyhow!("generator not found"))
+        };
+
+        // Step 1: query preprocessing
+        let qry_more = llm.query_preproc(qry, 4)?;
+        let queries = {
+            let queries = qry_more.queries();
+            let mut emb = self.embed.lock().await;
+            let t = emb.query(&queries)?;
+
+            (0 .. queries.len()).map(|i| {
+                t.i(i).unwrap().to_device(&candle_core::Device::Cpu).unwrap().unsqueeze(0).unwrap()
+            })
+            .collect::<Vec<_>>()
+        };
+
+        // Step 2: Approximate nearest neighbor search
+        let store = self.store.read().await;
+        let res = store.search(&queries, &[qry_more.topic().to_string()], 16, None)?;
+
+        for r in res.iter() {
+            println!("{} {}", r.0, r.2);
+        }
+
+        Ok(())
+    }
+
     // Triggers indexing workflow
     async fn index(&self, path: &Path) -> Result<()> {
+        {
+            // Drop generator module to save some VRAM
+            let has_gen = {
+                self.gen.lock().await.is_some()
+            };
+    
+            if has_gen {
+                let mut l = self.gen.lock().await;
+                *l = None;
+            }
+        }
+        
         println!("Initializing indexing ..");
         let mut to_index = vec![];
         // Create list of files
@@ -102,7 +155,7 @@ impl App {
                 }
             });
 
-        println!("Found {} files to index", to_index.len());
+        println!("Index {} files", to_index.len());
 
         let f2t = files_to_text(self.modeldir.as_path(), &to_index[..])?.concat();
 

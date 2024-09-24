@@ -129,6 +129,24 @@ pub struct QueryMore {
     keywords: Vec<String>,
 }
 
+impl QueryMore {
+    pub fn source(&self) -> &str {
+        &self.src
+    }
+
+    pub fn sub_queries(&self) -> &[String] {
+        &self.more[..]
+    }
+
+    pub fn topic(&self) -> &str {
+        &self.topic
+    }
+
+    pub fn queries(&self) -> Vec<String> {
+        [&[self.source().to_string()], self.sub_queries()].concat()
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct GeneratedAnswer {
     evidence: Vec<String>,

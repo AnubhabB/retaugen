@@ -17,6 +17,7 @@ const PADDING: f32 = 1.;
 
 // Given a list of files, group them by file types supported - `.pdf` & `.txt` for now and call their respective extraction flow
 pub fn files_to_text(models_dir: &Path, files: &[PathBuf]) -> Result<Vec<Vec<(String, FileKind)>>> {
+    println!("Sorting files for extraction..");
     let mut pdfs = vec![];
     let mut txts = vec![];
 
@@ -29,6 +30,8 @@ pub fn files_to_text(models_dir: &Path, files: &[PathBuf]) -> Result<Vec<Vec<(St
             }
         }
     });
+
+    println!("Pdfs: {} Text: {}", pdfs.len(), txts.len());
 
     let mut results = vec![];
     if !pdfs.is_empty() {
@@ -43,6 +46,9 @@ pub fn files_to_text(models_dir: &Path, files: &[PathBuf]) -> Result<Vec<Vec<(St
 
 // Reads text from each `.pdf` file and returns the text per page for the file
 pub fn pdf_to_text(models_dir: &Path, files: &[&PathBuf]) -> Result<Vec<Vec<(String, FileKind)>>> {
+    let n_doc = files.len();
+    println!("Begin extraction of {n_doc} pdf files");
+    
     // Initializing the layout detection model
     let layout_model = Detectron2Model::new(models_dir)?;
 
@@ -60,10 +66,12 @@ pub fn pdf_to_text(models_dir: &Path, files: &[&PathBuf]) -> Result<Vec<Vec<(Str
     // Now, for each `.pdf` file we are going to convert the pages to images
     let file_encoded = files
         .iter()
-        .filter_map(|&file| {
+        .enumerate()
+        .filter_map(|(i, &file)| {
             // Load the `.pdf` file
             let pdf = pdfium.load_pdf_from_file(file, None).ok()?;
-
+            let n_pages = pdf.pages().len();
+            println!("Doc[{i}]: got {n_pages} pages");
             // iterate over each page
             // Text and file info for each page
             let page_data = pdf
@@ -72,6 +80,7 @@ pub fn pdf_to_text(models_dir: &Path, files: &[&PathBuf]) -> Result<Vec<Vec<(Str
                 // keep track of page index to help us give better results
                 .enumerate()
                 .filter_map(|(idx, page)| {
+                    println!("Doc[{i}/{n_doc}]: Page[{idx}/{n_pages}]");
                     // Convert the page to an image
                     let img = page.render_with_config(&cfg).ok()?.as_image(); // Renders this page to an image::DynamicImage...
 
@@ -157,13 +166,13 @@ mod tests {
 
     #[test]
     fn extract_from_pdf() -> Result<()> {
-        let files = &[Path::new("../test-data/prehistory/archaeology.pdf").to_path_buf()];
+        let files = &[Path::new("../test-data/prehistory/origins-of-agriculture.pdf").to_path_buf()];
         let results = files_to_text(Path::new("../models"), files)?;
 
         assert!(!results.is_empty());
 
         // Let's print out the first page
-        for (txt, _) in results[0].iter().take(1) {
+        for (txt, _) in results[0].iter() {
             println!("{txt}");
         }
         Ok(())
