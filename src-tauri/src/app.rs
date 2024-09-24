@@ -95,24 +95,35 @@ impl App {
 
         // Step 1: query preprocessing
         let qry_more = llm.query_preproc(qry, 4)?;
-        let queries = {
+        let (q_txt, q_tensor) = {
             let queries = qry_more.queries();
             let mut emb = self.embed.lock().await;
             let t = emb.query(&queries)?;
 
-            (0 .. queries.len()).map(|i| {
+            let tensor = (0 .. queries.len()).map(|i| {
                 t.i(i).unwrap().to_device(&candle_core::Device::Cpu).unwrap().unsqueeze(0).unwrap()
             })
-            .collect::<Vec<_>>()
-        };
+            .collect::<Vec<_>>();
 
+            (
+                queries,
+                tensor
+            )
+        };
+        println!("{}", qry_more.topic());
         // Step 2: Approximate nearest neighbor search
         let store = self.store.read().await;
-        let res = store.search(&queries, &[qry_more.topic().to_string()], 16, None)?;
+        let res = store.search(&q_tensor, &[qry_more.topic().to_string()], 32, None)?;
 
-        for r in res.iter() {
-            println!("{} {}", r.0, r.2);
-        }
+        // Step 3: Check for relevance
+        // If we send ALL our response, we'll probably run out of context length
+        // So, let's chunk this
+        let relevant = res.chunks(4).filter_map(|c| {
+            let batched = c.iter().map(|k| (k.0, k.2.clone())).collect::<Vec<_>>();
+            llm.find_relevant(&q_txt, &batched).ok()
+        }).flatten().collect::<Vec<_>>();
+
+        println!("{relevant:?} {} {}", relevant.len(), res.len());
 
         Ok(())
     }
