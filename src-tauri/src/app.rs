@@ -23,6 +23,8 @@ pub struct App {
     modeldir: PathBuf,
 }
 
+const MAX_RESULTS: usize = 8;
+
 impl App {
     /// Create a new instance of the app
     pub fn new(appdir: &Path, models_dir: &Path) -> Result<Self> {
@@ -31,7 +33,7 @@ impl App {
             create_dir_all(&storage_dir)?;
         }
 
-        let (send, recv) = channel(100);
+        let (send, recv) = channel(32);
         let store = Arc::new(RwLock::new(Store::load_from_file(
             storage_dir.as_path(),
             None,
@@ -113,13 +115,14 @@ impl App {
         println!("{}", qry_more.topic());
         // Step 2: Approximate nearest neighbor search
         let store = self.store.read().await;
-        let res = store.search(&q_tensor, &[qry_more.topic().to_string()], 32, None)?;
+        let res = store.search(&q_tensor, &[qry_more.topic().to_string()], MAX_RESULTS * 2, None)?;
 
         // Step 3: Check for relevance
         // If we send ALL our response, we'll probably run out of context length
         // So, let's chunk this
-        let relevant = res.chunks(4).filter_map(|c| {
+        let relevant = res.chunks(4).enumerate().filter_map(|(i, c)| {
             let batched = c.iter().map(|k| (k.0, k.2.clone())).collect::<Vec<_>>();
+            println!("Relevance: A batch[{i}] begins!");
             llm.find_relevant(&q_txt, &batched).ok()
         }).flatten().collect::<Vec<_>>();
 
