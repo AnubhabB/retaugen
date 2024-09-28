@@ -24,6 +24,7 @@ pub struct App {
 }
 
 const MAX_RESULTS: usize = 8;
+const K_ADJACENT: usize = 2;
 
 impl App {
     /// Create a new instance of the app
@@ -126,7 +127,10 @@ impl App {
             llm.find_relevant(&q_txt, &batched).ok()
         }).flatten().collect::<Vec<_>>();
 
-        println!("{relevant:?} {} {}", relevant.len(), res.len());
+        // Step 4: context augmentation
+        let with_adjacent = relevant.iter().filter_map(|(idx, _)| store.with_k_adjacent(*idx, K_ADJACENT).ok()).collect::<Vec<_>>();
+        
+        // println!("{relevant:?} {} {}", relevant.len(), res.len());
 
         Ok(())
     }

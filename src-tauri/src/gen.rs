@@ -1,10 +1,11 @@
-use std::path::Path;
+use std::{path::Path, time::Instant};
 
 use anyhow::{anyhow, Result};
-use candle_core::{quantized::gguf_file, Device, Tensor};
+use candle_core::{DType, Device, Tensor};
+use candle_nn::VarBuilder;
 use candle_transformers::{
     generation::{LogitsProcessor, Sampling},
-    models::quantized_llama::ModelWeights,
+    models::llama::{Llama, LlamaConfig, Cache, Config},
 };
 use serde::Deserialize;
 use tokenizers::Tokenizer;
@@ -18,24 +19,35 @@ const MAX_NEW_TOKENS: usize = 2048;
 
 /// A struct to maintain a initialized Llama quantized `gguf` model and associated methods
 pub struct Generator {
+    cfg: Config,
     device: Device,
-    model: ModelWeights,
+    // model: ModelWeights,
+    model: Llama,
     tokenizer: Tokenizer,
     sampler: LogitsProcessor,
     stop_tokens: [u32; 2],
 }
 
 impl Generator {
-    const MODEL_FILE: &'static str = "Meta-Llama-3.1-8B-Instruct.Q8_0.gguf";
+    // const MODEL_FILE: &'static str = "Meta-Llama-3.1-8B-Instruct.Q8_0.gguf";
+    const MODEL_FILES: [&'static str; 2] = ["model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"];
     const TOKENIZER_FILE: &'static str = "llama_tokenizer.json";
+    const MODEL_CONFIG_FILE: &'static str = "llama_config.json";
 
     /// Initializer for new llama manager
     pub fn new(dir: &Path, device: &Device) -> Result<Self> {
-        let (model, tokenizer) = Self::load_model(dir, device)?;
+        let mut device = device.to_owned();
+        if let candle_core::Device::Metal(mut m) = device {
+            m.set_use_mlx_mm(false);
+            device = Device::Metal(m);
+        }
+
+        let (model, mut cfg, tokenizer) = Self::load_model(dir, &device)?;
         let stop_tokens = [
             tokenizer.token_to_id("<|eot_id|>").unwrap(),
             tokenizer.token_to_id("<|end_of_text|>").unwrap(),
         ];
+        cfg.max_position_embeddings = 4096;
 
         // Initializing the sampler
         let sampler = LogitsProcessor::from_sampling(
@@ -49,6 +61,7 @@ impl Generator {
 
         println!("Llama ready!");
         Ok(Self {
+            cfg,
             device: device.clone(),
             model,
             tokenizer,
@@ -58,21 +71,22 @@ impl Generator {
     }
 
     // A utility function to load the model and tokenizer
-    fn load_model(model_dir: &Path, device: &Device) -> Result<(ModelWeights, Tokenizer)> {
-        let model_file = model_dir.join(Self::MODEL_FILE);
+    fn load_model(model_dir: &Path, device: &Device) -> Result<(Llama, Config, Tokenizer)> {
+        // let model_file = model_dir.join(Self::MODEL_FILE);
         let tok_file = model_dir.join(Self::TOKENIZER_FILE);
+        let cfg_file = model_dir.join(Self::MODEL_CONFIG_FILE);
+        let model_files = Self::MODEL_FILES.iter().map(|mf| model_dir.join(mf)).collect::<Vec<_>>();
 
-        println!("Loading gguf model @{:?}", model_file);
-
-        let mut file = std::fs::File::open(model_file)?;
-        // reading the params from file
-        let model = gguf_file::Content::read(&mut file)?;
-
-        let model = ModelWeights::from_gguf(model, &mut file, device)?;
+        println!("Loading LLaMA ..");
+        let start = Instant::now();
+        let cfg = serde_json::from_slice::<LlamaConfig>(&std::fs::read(&cfg_file)?)?.into_config(false);
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&model_files, DType::BF16, device)? };
+        let llama = Llama::load(vb, &cfg)?;
+        println!("LLaMA loaded in {}s", (Instant::now() - start).as_secs());
 
         let tokenizer = Tokenizer::from_file(tok_file).unwrap();
 
-        Ok((model, tokenizer))
+        Ok((llama, cfg, tokenizer))
     }
 
     // Utility function to run the generation loop
@@ -85,12 +99,14 @@ impl Generator {
             .map_err(|e| anyhow!(e))?;
         println!("{} input tokenized in {}s", input.len(), (std::time::Instant::now() - start).as_secs());
 
+        let mut cache = Cache::new(true, DType::BF16, &self.cfg, &self.device)?;
+
         // Creating a tensor of input tokens
         let mut ip = Tensor::new(input.get_ids(), &self.device)?.unsqueeze(0)?;
         
         start = std::time::Instant::now();
         // The forward pass to the first token
-        let mut logits = self.model.forward(&ip, 0)?;
+        let mut logits = self.model.forward(&ip, 0, &mut cache)?;
 
         // Sampling the first token
         let mut next = self.sampler.sample(&logits.squeeze(0)?)?;
@@ -103,7 +119,7 @@ impl Generator {
         for i in input.len()..MAX_NEW_TOKENS {
             ip = Tensor::new(&[next], &self.device)?.unsqueeze(0)?;
 
-            logits = self.model.forward(&ip, i)?;
+            logits = self.model.forward(&ip, i, &mut cache)?;
             next = self.sampler.sample(&logits.squeeze(0)?)?;
 
             if self.stop_tokens.contains(&next) {
@@ -163,7 +179,7 @@ impl Generator {
     /// Given a `query` string and a `context` returns a response
     pub fn answer(&mut self, topic: &str, query: &str, context: &str) -> Result<GeneratedAnswer> {
         let prompt = format!(
-"<|start_header_id|>system<|end_header_id|>\n\nThis is a context-based question answering system. It retrieves information from provided context to answer user queries.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nThe given context are extracted from a bunch of documents with approximate nearest neighbour search and may contain data that are not relevant to the given query. You want to find out information about \"{topic}\" only if present in the given context.\n\nContext:\n\n```\n{context}\n```\n\n<|eot_id|><|start_header_id|>system<|end_header_id|>\n\nBased on the provided documents, generate a concise and relevant response to the following query:\n\n{query}\n\n\nRequirements:\n- Answer must be supported by at least one datapoint in the context.\n- Use natural language and avoid copying from documents.\n- Extract specific and short phrases from the given context that has been used to support the ansert as evidence\n- Truthfully return empty string (\"\") for answer and empty array for evidence if the given context doesn't contain the answer to the query.\n- Do not write an introduction or summary.\n- Return the response as a valid json of the following Schema.\n\n\nSchema:
+"<|start_header_id|>system<|end_header_id|>\n\nYou are a context-based question answering AI. You retrieve information from provided context to answer user queries. Based on the provided documents, generate a concise and relevant response to the given query by strictly adhering to the given requirments.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nThe given context are extracted from a bunch of documents with approximate nearest neighbour search and may contain data that are not relevant to the query. You want to find out information about \"{topic}\" only if present in the given context.\n\nContext:\n\n```\n{context}\n```\n\n\nQuery:\n\n{query}\n\n\nRequirements:\n- Answer must be supported by at least one datapoint in the context.\n- Use natural language and avoid copying from documents.\n- Extract specific and short phrases from the given context that has been used to support the ansert as evidence\n- Truthfully return empty string (\"\") for answer and empty array for evidence if the given context doesn't contain the answer to the query.\n- Do not write an introduction or summary.\n- Return the response as a valid json of the following Schema.\n\n\nSchema:
 {{
   evidence: Array<string>,
   answer: string
@@ -189,7 +205,7 @@ impl Generator {
             .join("\n");
 
         let prompt = format!(
-"<|start_header_id|>system<|end_header_id|>\n\nThis is a document relevance identification system. It identifies relevant documents based on a set of queries.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nDocuments:\n```\n{}\n```\n\nQueries:\n```\n- {}\n```\n\n\nTask: Identify the ids of documents relevant to these queries and rate them in a scale of 1-10 where 10 is most relevant.\n\n\nRequirements:\n- Return an Array<Tuple> of relevant numeric ids along with their relevance score.\n- Only include indices of documents containing relevant information.\n- If no documents are relevant, return an empty array.\n- Format of response should be \"[[numeric index, numeric score]]\" which is Array<Tuple<index, score>>.\n- Do not write any introduction, summary or justifications.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n[[",
+"<|start_header_id|>system<|end_header_id|>\n\nYou are a document relevance identification AI. You identify relevant documents based on a set of queries by strictly adhering to the given requirments.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nDocuments:\n```\n{}\n```\n\n\nQueries:\n```\n- {}\n```\n\n\nTask: Identify the ids of documents relevant to these queries and rate them in a scale of 1-10 where 10 is most relevant.\n\n\nRequirements:\n- Return an Array<Tuple> of relevant numeric ids along with their relevance score.\n- Only include indices of documents containing relevant information.\n- If no documents are relevant, return an empty array.\n- Format of response should be \"[[numeric index, numeric score]]\" which is Array<Tuple<index, score>>.\n- Do not write any introduction, summary or justifications.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n[[",
             docfmt,
             query.join("\n- ")
         );
@@ -202,11 +218,11 @@ impl Generator {
     /// Preprocesses a query to generate `topic` and supplimental queries for `Fusion Retrieval`
     pub fn query_preproc(&mut self, query: &str, num_sub_qry: usize) -> Result<QueryMore> {
         let prompt = format!(
-"<|start_header_id|>system<|end_header_id|>\n\nThis is a query generation system for Fusion Retrieval. It generates relevant sub-queries related to a given source query.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nGiven a source query that may require additional context or specific information, generate relevant sub-queries to retrieve more accurate results. Identify a word or a very short phrase that represents the topic of the query.\n\n\nSource Query:\n{query}\n\nGenerate {num_sub_qry} relevant sub-queries that:\n\n- Are closely related to the source query\n- Can be used to retrieve additional context or specific information\n- Are concise and clear\n\n\nRequirements:\n\n- Sub-queries should not repeat the source query\n- Sub-queries should be relevant to the source query's intent, purpose and context\n- use natural language for sub queries\n- your answer should be a valid json of the following schema.\n\n\nSchema:\n\n
+"<|start_header_id|>system<|end_header_id|>\n\nYou are a smart and intelligent AI assistant generating sub-queries and a topic for a Fusion Retrieval system based on a given source query. You always adhere to the given requirements.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nGiven a source query that may require additional context or specific information, generate relevant sub-queries to retrieve more accurate results. Identify a word or a very short phrase that represents the topic of the query.\n\n\nSource Query:\n{query}\n\n\nGenerate {num_sub_qry} relevant sub-queries that:\n- Are closely related to the source query\n- Can be used to retrieve additional context or specific information\n- Are concise and clear\n\n\nRequirements:\n- Sub-queries should not repeat the source query\n- Sub-queries should be relevant to the source query's intent, purpose and context\n- use natural language for sub queries\n- your answer should be a valid json of the following schema.\n\n\nSchema:\n\n
 {{
   sub_queries: Array<string>,
   topic: string
-}}\n\nAnswer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{{\n  \"sub_queries\": [\""
+}}\n\n\nAnswer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{{\n  \"sub_queries\": [\""
         );
 
         let tk = self.generate(&prompt)?;

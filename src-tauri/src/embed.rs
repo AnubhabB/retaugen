@@ -33,7 +33,7 @@ impl Embed {
         let qwen = unsafe {
             VarBuilder::from_mmaped_safetensors(
                 &[dir.join(Self::BASE_MODEL_FILE)],
-                candle_core::DType::F32, // TODO: why is this giving `NaN` @ F16
+                candle_core::DType::BF16,
                 &device,
             )?
         };
