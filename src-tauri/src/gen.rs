@@ -91,20 +91,23 @@ impl Generator {
 
     // Utility function to run the generation loop
     fn generate(&mut self, prompt: &str) -> Result<String> {
-        let mut start = std::time::Instant::now();
         // Tokenize the input
         let input = self
             .tokenizer
             .encode(prompt, true)
             .map_err(|e| anyhow!(e))?;
-        println!("{} input tokenized in {}s", input.len(), (std::time::Instant::now() - start).as_secs());
+        
+        if input.len() >= 4096 {
+            return Err(anyhow!("large input tokens!"))
+        }
 
         let mut cache = Cache::new(true, DType::BF16, &self.cfg, &self.device)?;
 
         // Creating a tensor of input tokens
         let mut ip = Tensor::new(input.get_ids(), &self.device)?.unsqueeze(0)?;
         
-        start = std::time::Instant::now();
+        let mut start = std::time::Instant::now();
+
         // The forward pass to the first token
         let mut logits = self.model.forward(&ip, 0, &mut cache)?;
 
@@ -231,6 +234,39 @@ impl Generator {
         res.src = query.to_string();
 
         Ok(res)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Summary {
+    heading: String,
+    summary: String
+}
+
+impl Summary {
+    pub fn summary(&self) -> &str {
+        &self.summary
+    }
+
+    pub fn heading(&self) -> &str {
+        &self.heading
+    }
+}
+
+impl Generator {
+    /// Generates summaries of given text
+    pub fn summarize(&mut self, context: &str) -> Result<Summary> {
+        let prompt = format!(
+"<|start_header_id|>system<|end_header_id|>\n\nYou are a smart and intelligent AI assistant generating a heading and summary of a given context. You always adhere to the given requirements.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nContext:\n```\n{context}\n```\n\n\nGenerate a short summary and a heading for the given context that:\n- Reflects the essence and tone of the context\n- Highlights and retains all key facts\n- Are concise and clear\n\n\nRequirements:\n- Heading should reflect the topic and essence of the context\n- Summary and heading should be relevant to the source text's intent, purpose and context\n- use natural language for summary\n- All key facts should be retained\n- your answer should be a valid json of the following schema.\n\n\nSchema:\n\n
+{{
+    heading: string,
+    summary: string
+}}\n\n\nAnswer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{{\n  \"heading\": \""
+        );
+
+        let tk = self.generate(&prompt)?;
+
+        serde_json::from_str::<Summary>(format!("{{\n   \"heading\": \"{tk}").as_str()).map_err(|e| anyhow!(e))
     }
 }
 

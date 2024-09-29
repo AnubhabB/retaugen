@@ -4,6 +4,7 @@ use std::{
 
 use anyhow::{anyhow, Result};
 use candle_core::IndexOp;
+use rayon::slice::ParallelSliceMut;
 use tauri::async_runtime::{self, channel, Mutex, Receiver, RwLock, Sender};
 
 use crate::{docs::files_to_text, embed::Embed, gen::Generator, store::Store, utils::select_device};
@@ -24,7 +25,7 @@ pub struct App {
 }
 
 const MAX_RESULTS: usize = 8;
-const K_ADJACENT: usize = 2;
+const K_ADJACENT: usize = 1;
 
 impl App {
     /// Create a new instance of the app
@@ -97,6 +98,7 @@ impl App {
         };
 
         // Step 1: query preprocessing
+        println!("Step 1: query preprocessing ..");
         let qry_more = llm.query_preproc(qry, 4)?;
         let (q_txt, q_tensor) = {
             let queries = qry_more.queries();
@@ -113,24 +115,57 @@ impl App {
                 tensor
             )
         };
-        println!("{}", qry_more.topic());
+        println!("{qry_more:?}");
+
         // Step 2: Approximate nearest neighbor search
+        println!("Step 2: ANN Search ..");
         let store = self.store.read().await;
         let res = store.search(&q_tensor, &[qry_more.topic().to_string()], MAX_RESULTS * 2, None)?;
+        println!("Step 2: ANN search returned {} results", res.len());
 
-        // Step 3: Check for relevance
+        // Step 3: Check for relevance and re-rank
         // If we send ALL our response, we'll probably run out of context length
         // So, let's chunk this
-        let relevant = res.chunks(4).enumerate().filter_map(|(i, c)| {
+        println!("Step 3: filtering out relevant results and reranking ..");
+        let mut relevant = res.chunks(6).enumerate().filter_map(|(i, c)| {
             let batched = c.iter().map(|k| (k.0, k.2.clone())).collect::<Vec<_>>();
             println!("Relevance: A batch[{i}] begins!");
+            println!("{batched:?}");
             llm.find_relevant(&q_txt, &batched).ok()
         }).flatten().collect::<Vec<_>>();
+        relevant.par_sort_by(|a, b| {
+            b.1.partial_cmp(&a.1).map_or(std::cmp::Ordering::Equal, |o| o)
+        });
+        println!("Step 3: Found {} relevant results", relevant.len());
 
-        // Step 4: context augmentation
-        let with_adjacent = relevant.iter().filter_map(|(idx, _)| store.with_k_adjacent(*idx, K_ADJACENT).ok()).collect::<Vec<_>>();
+        // Step 4: context augmentation - get adjacent data
+        println!("Step 4.1: getting {K_ADJACENT} adjacent data ..");
+        let context = relevant
+            .iter()
+            .filter_map(|(idx, _)| {
+                let a = store.with_k_adjacent(*idx, K_ADJACENT).ok()?;
+                let summary_before = if !a.0.is_empty() {
+                    let s = llm.summarize(&a.0.join("\n\n")).ok()?;
+                    format!("## {}\n\n{}", s.heading(), s.summary())
+                } else {
+                    String::new()
+                };
+                let summary_after = if !a.2.is_empty() {
+                    let s = llm.summarize(&a.2.join("\n\n")).ok()?;
+                    format!("## {}\n\n{}", s.heading(), s.summary())
+                } else {
+                    String::new()
+                };
+                
+                Some(
+                    [summary_before.as_str(), &a.1, summary_after.as_str()].join("\n------------\n")
+                )
+            }).collect::<Vec<_>>().join("\n\n\n");
         
-        // println!("{relevant:?} {} {}", relevant.len(), res.len());
+        println!("Context:\n{context}");
+        // Step 5: Finally the answer
+        // let answer = llm.answer(qry_more.topic(), qry_more.source(), &context)?;
+        // println!("{answer:?}");
 
         Ok(())
     }
