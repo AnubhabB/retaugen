@@ -18,9 +18,9 @@ tauri-build = { version = "2.0.0-rc", features = [] }
 anyhow              = "1"
 bincode             = "1"
 bm25                = { version = "0", features = ["parallelism"] }
-candle-core         = { git = "https://github.com/huggingface/candle.git", version = "0", features = ["metal"] }
-candle-nn           = { git = "https://github.com/huggingface/candle.git", version = "0", features = ["metal"] }
-candle-transformers = { git = "https://github.com/huggingface/candle.git", version = "0", features = ["metal"] }
+candle-core         = { git = "https://github.com/anubhabb/candle.git", branch = "stella", version = "0", features = ["metal"] }
+candle-nn           = { git = "https://github.com/anubhabb/candle.git", branch = "stella", features = ["metal"] }
+candle-transformers = { git = "https://github.com/anubhabb/candle.git", branch = "stella", features = ["metal"] }
 dashmap             = { version = "6", features = ["rayon"] }
 image               = { version = "0", default-features = false, features = ["rayon", "jpeg"] }
 ort                 = { version = "2.0.0-rc.6" }

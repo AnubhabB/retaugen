@@ -20,11 +20,11 @@ pub struct App {
     send: Sender<Event>,
     store: Arc<RwLock<Store>>,
     embed: Arc<Mutex<Embed>>,
-    appdir: PathBuf,
+    // appdir: PathBuf,
     modeldir: PathBuf,
 }
 
-const MAX_RESULTS: usize = 8;
+const MAX_RESULTS: usize = 4;
 const K_ADJACENT: usize = 1;
 
 impl App {
@@ -48,7 +48,7 @@ impl App {
             send,
             store,
             embed,
-            appdir: appdir.to_path_buf(),
+            // appdir: appdir.to_path_buf(),
             modeldir: models_dir.to_path_buf(),
         };
 
@@ -99,7 +99,7 @@ impl App {
 
         // Step 1: query preprocessing
         println!("Step 1: query preprocessing ..");
-        let qry_more = llm.query_preproc(qry, 4)?;
+        let qry_more = llm.query_preproc(qry, 2)?;
         let (q_txt, q_tensor) = {
             let queries = qry_more.queries();
             let mut emb = self.embed.lock().await;
@@ -120,7 +120,7 @@ impl App {
         // Step 2: Approximate nearest neighbor search
         println!("Step 2: ANN Search ..");
         let store = self.store.read().await;
-        let res = store.search(&q_tensor, &[qry_more.topic().to_string()], MAX_RESULTS * 2, None)?;
+        let res = store.search(&q_tensor, &[qry_more.topic().to_string()], MAX_RESULTS, Some(0.75))?;
         println!("Step 2: ANN search returned {} results", res.len());
 
         // Step 3: Check for relevance and re-rank
@@ -130,7 +130,6 @@ impl App {
         let mut relevant = res.chunks(6).enumerate().filter_map(|(i, c)| {
             let batched = c.iter().map(|k| (k.0, k.2.clone())).collect::<Vec<_>>();
             println!("Relevance: A batch[{i}] begins!");
-            println!("{batched:?}");
             llm.find_relevant(&q_txt, &batched).ok()
         }).flatten().collect::<Vec<_>>();
         relevant.par_sort_by(|a, b| {
@@ -139,28 +138,32 @@ impl App {
         println!("Step 3: Found {} relevant results", relevant.len());
 
         // Step 4: context augmentation - get adjacent data
-        println!("Step 4.1: getting {K_ADJACENT} adjacent data ..");
+        println!("Step 4: getting {K_ADJACENT} adjacent data ..");
         let context = relevant
             .iter()
             .filter_map(|(idx, _)| {
                 let a = store.with_k_adjacent(*idx, K_ADJACENT).ok()?;
-                let summary_before = if !a.0.is_empty() {
-                    let s = llm.summarize(&a.0.join("\n\n")).ok()?;
-                    format!("## {}\n\n{}", s.heading(), s.summary())
-                } else {
-                    String::new()
-                };
-                let summary_after = if !a.2.is_empty() {
-                    let s = llm.summarize(&a.2.join("\n\n")).ok()?;
-                    format!("## {}\n\n{}", s.heading(), s.summary())
-                } else {
-                    String::new()
-                };
+                println!("Before: {:?}", &a.0);
+                println!("This: {:?}", a.1);
+                println!("After: {:?}", &a.2);
+                // let summary_before = if !a.0.is_empty() {
+                //     let s = llm.summarize(&a.0.join("\n\n")).ok()?;
+                //     format!("## {}\n\n{}", s.heading(), s.summary())
+                // } else {
+                //     String::new()
+                // };
+                // let summary_after = if !a.2.is_empty() {
+                //     let s = llm.summarize(&a.2.join("\n\n")).ok()?;
+                //     format!("## {}\n\n{}", s.heading(), s.summary())
+                // } else {
+                //     String::new()
+                // };
+                
                 
                 Some(
-                    [summary_before.as_str(), &a.1, summary_after.as_str()].join("\n------------\n")
+                    [a.0.join("\n").as_str(), &a.1, a.2.join("\n").as_str()].join("\n------------\n")
                 )
-            }).collect::<Vec<_>>().join("\n\n\n");
+            }).collect::<Vec<_>>().join("\n\n");
         
         println!("Context:\n{context}");
         // Step 5: Finally the answer

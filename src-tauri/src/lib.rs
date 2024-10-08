@@ -13,7 +13,7 @@ mod docs;
 mod embed;
 mod gen;
 mod layout;
-mod stella;
+// mod stella;
 mod store;
 mod utils;
 

@@ -474,7 +474,7 @@ mod tests {
     use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
     use serde::Deserialize;
 
-    use crate::{embed::Embed, stella::Config};
+    use crate::embed::Embed;
 
     use super::{FileKind, Store};
 
@@ -495,7 +495,7 @@ mod tests {
         let mut embed = Embed::new(Path::new("../models"))?;
 
         let mut chunks = data
-            .chunks(Config::STELLA_MAX_BATCH)
+            .chunks(Embed::STELLA_MAX_BATCH)
             .take(128)
             .filter_map(|c| {
                 let batch = c

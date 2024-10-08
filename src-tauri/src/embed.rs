@@ -3,21 +3,23 @@ use std::path::Path;
 use anyhow::{anyhow, Result};
 use candle_core::{DType, Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
+use candle_transformers::models::stella_en_v5;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use text_splitter::{ChunkConfig, MarkdownSplitter};
 use tokenizers::{Encoding, PaddingDirection, PaddingParams, PaddingStrategy, Tokenizer};
 
-use crate::{stella::Config, utils::select_device};
+use crate::utils::select_device;
 
 // A container for our embedding related tasks
 pub struct Embed {
     device: Device,
-    model: crate::stella::Stella,
+    model: stella_en_v5::EmbeddingModel,
     tokenizer: Tokenizer,
     splitter: MarkdownSplitter<Tokenizer>,
 }
 
 impl Embed {
+    pub const STELLA_MAX_BATCH: usize = 8;
     pub const SPLIT_SIZE: usize = 512;
     pub const BASE_MODEL_FILE: &'static str = "qwen2.safetensors";
     pub const HEAD_MODEL_FILE: &'static str = "embed_head1024.safetensors";
@@ -25,7 +27,7 @@ impl Embed {
 
     pub fn new(dir: &Path) -> Result<Self> {
         // Config straitup copied from https://huggingface.co/dunzhang/stella_en_1.5B_v5/blob/main/config.json
-        let cfg = crate::stella::Config::default();
+        let cfg = stella_en_v5::Config::new_1_5_b_v5(stella_en_v5::EmbedDim::Dim1024);
 
         let device = select_device()?;
 
@@ -46,14 +48,14 @@ impl Embed {
             )?
         };
 
-        let model = crate::stella::Stella::new(&cfg, qwen, head)?;
+        let model = stella_en_v5::EmbeddingModel::new(&cfg, qwen, head)?;
         let mut tokenizer =
             Tokenizer::from_file(dir.join(Self::TOKENIZER_FILE)).map_err(|e| anyhow!(e))?;
         let pad_id = tokenizer.token_to_id("<|endoftext|>").unwrap();
 
         tokenizer.with_padding(Some(PaddingParams {
             strategy: PaddingStrategy::BatchLongest,
-            direction: PaddingDirection::Right,
+            direction: PaddingDirection::Left,
             pad_id,
             pad_token: "<|endoftext|>".to_string(),
             ..Default::default()
@@ -106,7 +108,7 @@ impl Embed {
             masks = masks.slice_assign(&[i..i + 1, 0..mask.dims2().unwrap().1], &mask)?;
         }
 
-        Ok(self.model.forward(&ids, &masks, 0)?)
+        Ok(self.model.forward(&ids, &masks)?)
     }
 
     pub fn split_text_and_encode(
@@ -116,7 +118,7 @@ impl Embed {
         let splits = self.splitter.chunks(doc).collect::<Vec<_>>();
 
         splits
-            .chunks(Config::STELLA_MAX_BATCH)
+            .chunks(Self::STELLA_MAX_BATCH)
             .flat_map(|c| {
                 let embed = self
                     .embeddings(&c.iter().map(|c| c.to_string()).collect::<Vec<_>>()[..])
