@@ -48,7 +48,7 @@ pub fn files_to_text(models_dir: &Path, files: &[PathBuf]) -> Result<Vec<Vec<(St
 pub fn pdf_to_text(models_dir: &Path, files: &[&PathBuf]) -> Result<Vec<Vec<(String, FileKind)>>> {
     let n_doc = files.len();
     println!("Begin extraction of {n_doc} pdf files");
-    
+
     // Initializing the layout detection model
     let layout_model = Detectron2Model::new(models_dir)?;
 
@@ -166,7 +166,8 @@ mod tests {
 
     #[test]
     fn extract_from_pdf() -> Result<()> {
-        let files = &[Path::new("../test-data/prehistory/origins-of-agriculture.pdf").to_path_buf()];
+        let files =
+            &[Path::new("../test-data/prehistory/origins-of-agriculture.pdf").to_path_buf()];
         let results = files_to_text(Path::new("../models"), files)?;
 
         assert!(!results.is_empty());

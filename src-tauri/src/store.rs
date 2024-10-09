@@ -290,7 +290,7 @@ impl Store {
         // Let's collect all indices that need to be fethed
         // We have to ensure indices that are in the SAME source file
         let start = if k > idx { 0 } else { idx - k };
-        let end = (idx + k).max(self.data.len());
+        let end = (idx + k + 1).min(self.data.len());
 
         let trg_data = if let Some(d) = self.data.get(idx) {
             d

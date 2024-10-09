@@ -5,7 +5,7 @@ use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::{
     generation::{LogitsProcessor, Sampling},
-    models::llama::{Llama, LlamaConfig, Cache, Config},
+    models::llama::{Cache, Config, Llama, LlamaConfig},
 };
 use serde::Deserialize;
 use tokenizers::Tokenizer;
@@ -30,7 +30,10 @@ pub struct Generator {
 
 impl Generator {
     // const MODEL_FILE: &'static str = "Meta-Llama-3.1-8B-Instruct.Q8_0.gguf";
-    const MODEL_FILES: [&'static str; 2] = ["model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"];
+    const MODEL_FILES: [&'static str; 2] = [
+        "model-00001-of-00002.safetensors",
+        "model-00002-of-00002.safetensors",
+    ];
     const TOKENIZER_FILE: &'static str = "llama_tokenizer.json";
     const MODEL_CONFIG_FILE: &'static str = "llama_config.json";
 
@@ -75,11 +78,15 @@ impl Generator {
         // let model_file = model_dir.join(Self::MODEL_FILE);
         let tok_file = model_dir.join(Self::TOKENIZER_FILE);
         let cfg_file = model_dir.join(Self::MODEL_CONFIG_FILE);
-        let model_files = Self::MODEL_FILES.iter().map(|mf| model_dir.join(mf)).collect::<Vec<_>>();
+        let model_files = Self::MODEL_FILES
+            .iter()
+            .map(|mf| model_dir.join(mf))
+            .collect::<Vec<_>>();
 
         println!("Loading LLaMA ..");
         let start = Instant::now();
-        let cfg = serde_json::from_slice::<LlamaConfig>(&std::fs::read(&cfg_file)?)?.into_config(false);
+        let cfg =
+            serde_json::from_slice::<LlamaConfig>(&std::fs::read(&cfg_file)?)?.into_config(false);
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&model_files, DType::BF16, device)? };
         let llama = Llama::load(vb, &cfg)?;
         println!("LLaMA loaded in {}s", (Instant::now() - start).as_secs());
@@ -96,16 +103,16 @@ impl Generator {
             .tokenizer
             .encode(prompt, true)
             .map_err(|e| anyhow!(e))?;
-        
+
         if input.len() >= 4096 {
-            return Err(anyhow!("large input tokens!"))
+            return Err(anyhow!("large input tokens!"));
         }
 
         let mut cache = Cache::new(true, DType::BF16, &self.cfg, &self.device)?;
 
         // Creating a tensor of input tokens
         let mut ip = Tensor::new(input.get_ids(), &self.device)?.unsqueeze(0)?;
-        
+
         let mut start = std::time::Instant::now();
 
         // The forward pass to the first token
@@ -113,7 +120,11 @@ impl Generator {
 
         // Sampling the first token
         let mut next = self.sampler.sample(&logits.squeeze(0)?)?;
-        println!("{} prompt tokens processed @ {}t/s", input.len(), input.len() as f32/ (std::time::Instant::now() - start).as_secs() as f32);
+        println!(
+            "{} prompt tokens processed @ {}t/s",
+            input.len(),
+            input.len() as f32 / (std::time::Instant::now() - start).as_secs() as f32
+        );
         // A container for all tokens generated
         let mut all_tokens = vec![next];
 
@@ -131,7 +142,11 @@ impl Generator {
 
             all_tokens.push(next);
         }
-        println!("{} tokens generated @ {}t/s", all_tokens.len() - 1,  (all_tokens.len() - 1) as f32/ (std::time::Instant::now() - start).as_secs() as f32);
+        println!(
+            "{} tokens generated @ {}t/s",
+            all_tokens.len() - 1,
+            (all_tokens.len() - 1) as f32 / (std::time::Instant::now() - start).as_secs() as f32
+        );
 
         // Decode tokens and return result
         Ok(match self.tokenizer.decode(&all_tokens[..], false) {
@@ -151,7 +166,7 @@ pub struct QueryMore {
     src: String,
     #[serde(rename = "sub_queries")]
     more: Vec<String>,
-    topic: String
+    topic: String,
 }
 
 impl QueryMore {
@@ -215,7 +230,8 @@ impl Generator {
 
         let tk = self.generate(&prompt)?;
 
-        serde_json::from_str::<Vec<(usize, f32)>>(format!("[[{tk}").as_str()).map_err(|e| anyhow!(e))
+        serde_json::from_str::<Vec<(usize, f32)>>(format!("[[{tk}").as_str())
+            .map_err(|e| anyhow!(e))
     }
 
     /// Preprocesses a query to generate `topic` and supplimental queries for `Fusion Retrieval`
@@ -237,38 +253,38 @@ impl Generator {
     }
 }
 
-#[derive(Debug, Deserialize)]
-pub struct Summary {
-    heading: String,
-    summary: String
-}
+// #[derive(Debug, Deserialize)]
+// pub struct Summary {
+//     heading: String,
+//     summary: String
+// }
 
-impl Summary {
-    pub fn summary(&self) -> &str {
-        &self.summary
-    }
+// impl Summary {
+//     pub fn summary(&self) -> &str {
+//         &self.summary
+//     }
 
-    pub fn heading(&self) -> &str {
-        &self.heading
-    }
-}
+//     pub fn heading(&self) -> &str {
+//         &self.heading
+//     }
+// }
 
-impl Generator {
-    /// Generates summaries of given text
-    pub fn summarize(&mut self, context: &str) -> Result<Summary> {
-        let prompt = format!(
-"<|start_header_id|>system<|end_header_id|>\n\nYou are a smart and intelligent AI assistant generating a heading and summary of a given context. You always adhere to the given requirements.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nContext:\n```\n{context}\n```\n\n\nGenerate a short summary and a heading for the given context that:\n- Reflects the essence and tone of the context\n- Highlights and retains all key facts\n- Are concise and clear\n\n\nRequirements:\n- Heading should reflect the topic and essence of the context\n- Summary and heading should be relevant to the source text's intent, purpose and context\n- use natural language for summary\n- All key facts should be retained\n- your answer should be a valid json of the following schema.\n\n\nSchema:\n\n
-{{
-    heading: string,
-    summary: string
-}}\n\n\nAnswer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{{\n  \"heading\": \""
-        );
+// impl Generator {
+//     /// Generates summaries of given text
+//     pub fn summarize(&mut self, context: &str) -> Result<Summary> {
+//         let prompt = format!(
+// "<|start_header_id|>system<|end_header_id|>\n\nYou are a smart and intelligent AI assistant generating a heading and summary of a given context. You always adhere to the given requirements.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nContext:\n```\n{context}\n```\n\n\nGenerate a short summary and a heading for the given context that:\n- Reflects the essence and tone of the context\n- Highlights and retains all key facts\n- Are concise and clear\n\n\nRequirements:\n- Heading should reflect the topic and essence of the context\n- Summary and heading should be relevant to the source text's intent, purpose and context\n- use natural language for summary\n- All key facts should be retained\n- your answer should be a valid json of the following schema.\n\n\nSchema:\n\n
+// {{
+//     heading: string,
+//     summary: string
+// }}\n\n\nAnswer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{{\n  \"heading\": \""
+//         );
 
-        let tk = self.generate(&prompt)?;
+//         let tk = self.generate(&prompt)?;
 
-        serde_json::from_str::<Summary>(format!("{{\n   \"heading\": \"{tk}").as_str()).map_err(|e| anyhow!(e))
-    }
-}
+//         serde_json::from_str::<Summary>(format!("{{\n   \"heading\": \"{tk}").as_str()).map_err(|e| anyhow!(e))
+//     }
+// }
 
 #[cfg(test)]
 mod tests {
@@ -318,7 +334,7 @@ mod tests {
                 "## Saddam Hussein profited roughly 1B by taking funds from UN program\nInvestigators said that Saddam Hussein diverted money from the Oil-for-Food Program to pay millions of dollars to families of suicide bombers from the West Bank and Gaza Strip who carried out attacks on Israeli civilians.\n\nPaul Volcker, a former American official investigating the diverted funds scandal, has taken some heat from advocates demanding that he haul United Nations personnel before the US Congress. His reason for not subjecting them to this degree of open scrutiny is that it would have the perverse effect of pushing them into refusing to cooperate with the investigation at all. He plans to release documentary evidence early next year, when his investigation is complete.".to_string()
             )
         ])?;
-        
+
         println!("{relevance:?}");
         // assert_eq!(&[1, 5, 12], &relevance[..]);
         Ok(())
