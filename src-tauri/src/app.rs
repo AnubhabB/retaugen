@@ -103,7 +103,7 @@ impl App {
 
         // Step 1: query preprocessing
         println!("Step 1: query preprocessing ..");
-        let qry_more = llm.query_preproc(qry, 4)?;
+        let qry_more = llm.query_preproc(qry, 3)?;
         let (q_txt, q_tensor) = {
             let queries = qry_more.queries();
             let mut emb = self.embed.lock().await;
@@ -140,7 +140,7 @@ impl App {
         // So, let's chunk this
         println!("Step 3: filtering out relevant results and reranking ..");
         let mut relevant = res
-            .chunks(6)
+            .chunks(8)
             .enumerate()
             .filter_map(|(i, c)| {
                 let batched = c.iter().map(|k| (k.0, k.2.clone())).collect::<Vec<_>>();
