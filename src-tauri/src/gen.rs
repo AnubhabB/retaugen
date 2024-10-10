@@ -15,8 +15,6 @@ const TEMPERATURE: f64 = 0.8;
 const TOP_P: f64 = 0.95;
 const TOP_K: usize = 40;
 
-const MAX_NEW_TOKENS: usize = 2048;
-
 /// A struct to maintain a initialized Llama quantized `gguf` model and associated methods
 pub struct Generator {
     cfg: Config,
@@ -104,7 +102,7 @@ impl Generator {
             .encode(prompt, true)
             .map_err(|e| anyhow!(e))?;
 
-        if input.len() >= 4096 {
+        if input.len() >= self.cfg.max_position_embeddings {
             return Err(anyhow!("large input tokens!"));
         }
 
@@ -129,8 +127,9 @@ impl Generator {
         let mut all_tokens = vec![next];
 
         start = std::time::Instant::now();
+
         // Forward pass - decoder loop
-        for i in input.len()..MAX_NEW_TOKENS {
+        for i in input.len()..(self.cfg.max_position_embeddings - input.len()) {
             ip = Tensor::new(&[next], &self.device)?.unsqueeze(0)?;
 
             logits = self.model.forward(&ip, i, &mut cache)?;
@@ -197,17 +196,25 @@ impl Generator {
     /// Given a `query` string and a `context` returns a response
     pub fn answer(&mut self, topic: &str, query: &str, context: &str) -> Result<GeneratedAnswer> {
         let prompt = format!(
-"<|start_header_id|>system<|end_header_id|>\n\nYou are a context-based question answering AI. You retrieve information from provided context to answer user queries. Based on the provided documents, generate a concise and relevant response to the given query by strictly adhering to the given requirments.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nThe given context are extracted from a bunch of documents with approximate nearest neighbour search and may contain data that are not relevant to the query. You want to find out information about \"{topic}\" only if present in the given context.\n\nContext:\n\n```\n{context}\n```\n\n\nQuery:\n\n{query}\n\n\nRequirements:\n- Answer must be supported by at least one datapoint in the context.\n- Use natural language and avoid copying from documents.\n- Extract specific and short phrases from the given context that has been used to support the ansert as evidence\n- Truthfully return empty string (\"\") for answer and empty array for evidence if the given context doesn't contain the answer to the query.\n- Do not write an introduction or summary.\n- Return the response as a valid json of the following Schema.\n\n\nSchema:
+"<|start_header_id|>system<|end_header_id|>\n\nYou are a context-based question answering AI. You retrieve information from provided context to answer user queries. Based on the provided context, generate a concise and relevant response to the given query by following the given requirments.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nText in the given context are extracted with approximate search of a text corpus. You want to find out information about \"{topic}\" only if present in the given context.\n\n\nContext:\n\n{context}\n\n\nQuery:\n\n{query}\n\n\nRequirements:\n- Answer must be supported by at least one datapoint in the context, extract the supporting text as evidence.\n- Use natural language summary for your answer and avoid copying from given context for your answer.\n- Truthfully return empty string (\"\") for answer if the given context doesn't contain the answer to the query.\n- Do not write an introduction or summary.\n- Your response must be a valid json of the following Schema.\n\n\nSchema:
+
 {{
-  evidence: Array<string>,
-  answer: string
-}}<|eot_id|><|start_header_id|>assistant<|end_header_id|>{{
-  \"evidence\": ["
+    evidence: Array<string>,
+    answer: string
+}}
+    
+Your answer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{{\n\t\"evidence\": ["
         );
 
-        let tk = self.generate(&prompt)?;
+        let mut tk = self.generate(&prompt)?;
 
-        serde_json::from_str(format!("{{\n  \"evidence\": [{tk}").as_str()).map_err(|e| anyhow!(e))
+        if !tk.ends_with("}") {
+            tk = format!("{tk}}}");
+        }
+        println!("{:#?}", tk);
+        let a = serde_json::from_str(format!("{{\n  \"evidence\": [{tk}").as_str()).unwrap(); //.map_err(|e| anyhow!(e))
+
+        Ok(a)
     }
 
     /// Given a set of queries and a set of documents, return a list of indices that are relevant to the queries
@@ -223,15 +230,13 @@ impl Generator {
             .join("\n");
 
         let prompt = format!(
-"<|start_header_id|>system<|end_header_id|>\n\nYou are a document relevance identification AI. You identify relevant documents based on a set of queries by strictly adhering to the given requirments.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nDocuments:\n```\n{}\n```\n\n\nQueries:\n```\n- {}\n```\n\n\nTask: Identify the ids of documents relevant to these queries and rate them in a scale of 1-10 where 10 is most relevant.\n\n\nRequirements:\n- Return an Array<Tuple> of relevant numeric ids along with their relevance score.\n- Only include indices of documents containing relevant information.\n- If no documents are relevant, return an empty array.\n- Format of response should be \"[[numeric index, numeric score]]\" which is Array<Tuple<index, score>>.\n- Do not write any introduction, summary or justifications.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n[[",
+"<|start_header_id|>system<|end_header_id|>\n\nYou are a document relevance identification AI. You identify relevant documents based on a set of queries by strictly following the given requirments.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nDocuments:\n\n{}\n\n\n\nQueries:\n\n- {}\n\n\n\nTask: Identify the ids of documents that are relevant for generating answers to the given queries and rate them in a scale of 1-10 where a score of 10 is most relevant.\n\n\nRequirements:\n- Return an Array<Tuple> of relevant numeric ids along with their relevance score.\n- Only include ids of documents containing relevant information.\n- If no documents are relevant, return an empty array.\n- Format of response should be \"[[numeric index, numeric score]]\" which is Array<Tuple<index, score>>.\n- Do not write any introduction, summary or justifications.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n[",
             docfmt,
             query.join("\n- ")
         );
 
         let tk = self.generate(&prompt)?;
-
-        serde_json::from_str::<Vec<(usize, f32)>>(format!("[[{tk}").as_str())
-            .map_err(|e| anyhow!(e))
+        serde_json::from_str::<Vec<(usize, f32)>>(format!("[{tk}").as_str()).map_err(|e| anyhow!(e))
     }
 
     /// Preprocesses a query to generate `topic` and supplimental queries for `Fusion Retrieval`
@@ -253,38 +258,39 @@ impl Generator {
     }
 }
 
-// #[derive(Debug, Deserialize)]
-// pub struct Summary {
-//     heading: String,
-//     summary: String
-// }
+#[derive(Debug, Deserialize)]
+pub struct Summary {
+    heading: String,
+    summary: String,
+}
 
-// impl Summary {
-//     pub fn summary(&self) -> &str {
-//         &self.summary
-//     }
+impl Summary {
+    pub fn summary(&self) -> &str {
+        &self.summary
+    }
 
-//     pub fn heading(&self) -> &str {
-//         &self.heading
-//     }
-// }
+    pub fn heading(&self) -> &str {
+        &self.heading
+    }
+}
 
-// impl Generator {
-//     /// Generates summaries of given text
-//     pub fn summarize(&mut self, context: &str) -> Result<Summary> {
-//         let prompt = format!(
-// "<|start_header_id|>system<|end_header_id|>\n\nYou are a smart and intelligent AI assistant generating a heading and summary of a given context. You always adhere to the given requirements.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nContext:\n```\n{context}\n```\n\n\nGenerate a short summary and a heading for the given context that:\n- Reflects the essence and tone of the context\n- Highlights and retains all key facts\n- Are concise and clear\n\n\nRequirements:\n- Heading should reflect the topic and essence of the context\n- Summary and heading should be relevant to the source text's intent, purpose and context\n- use natural language for summary\n- All key facts should be retained\n- your answer should be a valid json of the following schema.\n\n\nSchema:\n\n
-// {{
-//     heading: string,
-//     summary: string
-// }}\n\n\nAnswer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{{\n  \"heading\": \""
-//         );
+impl Generator {
+    /// Generates summaries of given text
+    pub fn summarize(&mut self, queries: &str, context: &str) -> Result<Summary> {
+        let prompt = format!(
+"<|start_header_id|>system<|end_header_id|>\n\nYou are a smart and intelligent AI assistant generating a heading and summary of a given data so that it can be used for answering the user queries.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nQueries:\n\n{queries}\n\n\nData:\n\n{context}\n\n\n\nGenerate a short summary and a heading for the given data that:\n- Reflects the essence, tone and information of the data\n- Retains all key facts\n- Are concise and clear\n- Can be used as evidence to answer given queries\n\n\nRequirements:\n- Heading should reflect the topic and essence of the data\n- Summary and heading should be relevant to the source data's intent, purpose and context\n- use natural language for summary\n- All key facts should be retained\n- Summary should not be more than 350 words\n\n\nSchema:\n\n
+{{
+    heading: string,
+    summary: string
+}}\n\n\nAnswer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{{\n  \"heading\": \""
+        );
 
-//         let tk = self.generate(&prompt)?;
+        let tk = self.generate(&prompt)?;
 
-//         serde_json::from_str::<Summary>(format!("{{\n   \"heading\": \"{tk}").as_str()).map_err(|e| anyhow!(e))
-//     }
-// }
+        serde_json::from_str::<Summary>(format!("{{\n   \"heading\": \"{tk}").as_str())
+            .map_err(|e| anyhow!(e))
+    }
+}
 
 #[cfg(test)]
 mod tests {

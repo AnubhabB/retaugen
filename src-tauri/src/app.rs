@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs::create_dir_all,
     path::{Path, PathBuf},
     sync::Arc,
@@ -132,6 +133,7 @@ impl App {
             &[qry_more.topic().to_string()],
             MAX_RESULTS,
             Some(0.75),
+            false,
         )?;
         println!("Step 2: ANN search returned {} results", res.len());
 
@@ -139,6 +141,8 @@ impl App {
         // If we send ALL our response, we'll probably run out of context length
         // So, let's chunk this
         println!("Step 3: filtering out relevant results and reranking ..");
+        // Sometimes the LLM ends up returning duplicates, this is to clean them out
+        let mut unq = HashSet::new();
         let mut relevant = res
             .chunks(8)
             .enumerate()
@@ -148,25 +152,39 @@ impl App {
                 llm.find_relevant(&q_txt, &batched).ok()
             })
             .flatten()
+            .filter(|j| {
+                println!("{} {}", j.0, j.1);
+                if unq.contains(&j.0) || j.1 < 5. {
+                    false
+                } else {
+                    unq.insert(j.0);
+                    true
+                }
+            })
             .collect::<Vec<_>>();
+
         relevant.par_sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
                 .map_or(std::cmp::Ordering::Equal, |o| o)
         });
+
         println!("Step 3: Found {} relevant results", relevant.len());
 
+        let qry_str = q_txt.join("\n");
         // Step 4: context augmentation - get adjacent data
         println!("Step 4: getting {K_ADJACENT} adjacent data ..");
         let context = relevant
             .iter()
-            .filter_map(|(idx, cfd)| {
+            .filter_map(|(idx, _)| {
                 let a = store.with_k_adjacent(*idx, K_ADJACENT).ok()?;
-                println!(
-                    "{idx}[{cfd}]: Before: {}\nThis: {}\nNext: [{}]",
-                    a.0.len(),
-                    a.1,
-                    a.2.len()
-                );
+                let txt = [a.0.join("\n").as_str(), &a.1, a.2.join("\n").as_str()].join("\n\n");
+
+                let summary = llm.summarize(&qry_str, &txt).ok()?;
+                let txt = if !summary.heading().is_empty() && !summary.summary().is_empty() {
+                    format!("## {}\n\n\n{}", summary.heading(), summary.summary())
+                } else {
+                    txt
+                };
                 // println!("Before: {:?}", &a.0.len());
                 // println!("This: {:?}", a.1);
                 // println!("After: {:?}", &a.2.len());
@@ -183,13 +201,14 @@ impl App {
                 //     String::new()
                 // };
 
-                Some([a.0.join("\n").as_str(), &a.1, a.2.join("\n").as_str()].join("\n\n"))
+                Some(txt)
             })
             .collect::<Vec<_>>()
             .join("\n\n");
 
         // println!("Context:\n{context}");
         // Step 5: Finally the answer
+        println!("Step 5: Generating answer ..");
         let answer = llm.answer(qry_more.topic(), qry_more.source(), &context)?;
         println!("{answer:?}");
 

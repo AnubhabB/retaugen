@@ -157,6 +157,7 @@ impl Store {
         qry_str: &[String],
         top_k: usize,
         ann_cutoff: Option<f32>,
+        with_bm25: bool,
     ) -> Result<Vec<(usize, &Data, String, f32)>> {
         // Giving 75% weightage to the ANN search and 25% to BM25 search
         const ALPHA: f32 = 0.75;
@@ -196,6 +197,9 @@ impl Store {
                 ann
             },
             || {
+                if !with_bm25 {
+                    return None;
+                }
                 let bm25 = DashMap::new();
                 if let Some(b) = self.bm25.as_ref() {
                     qry_str.par_iter().for_each(|qs| {
@@ -210,7 +214,7 @@ impl Store {
                     });
                 };
 
-                bm25
+                Some(bm25)
             },
         );
 
@@ -237,15 +241,19 @@ impl Store {
         let mut bm25_max = 0_f32;
         let mut bm25_min = f32::MAX;
 
-        let has_bm_25 = !bm25.is_empty();
+        let has_bm_25 = bm25.as_ref().map_or(false, |b| b.is_empty());
 
         let bm25_div = if has_bm_25 {
-            bm25.iter().for_each(|j| {
-                bm25_max = j.max(bm25_max);
-                bm25_min = j.min(bm25_min);
-            });
+            if let Some(b) = bm25.as_ref() {
+                b.iter().for_each(|j| {
+                    bm25_max = j.max(bm25_max);
+                    bm25_min = j.min(bm25_min);
+                });
 
-            bm25_max - bm25_min
+                bm25_max - bm25_min
+            } else {
+                f32::MIN
+            }
         } else {
             f32::MIN
         };
@@ -257,7 +265,7 @@ impl Store {
                 let id = *j.key();
                 let ann_score = 1. - (j.2 - ann_min) / ann_div;
                 let bm25_score = if has_bm_25 {
-                    let bm25_score = if let Some(b) = bm25.get(&id) {
+                    let bm25_score = if let Some(b) = bm25.as_ref().and_then(|b| b.get(&id)) {
                         (*b - bm25_min) / bm25_div
                     } else {
                         // Some very small number if not present
@@ -561,7 +569,7 @@ mod tests {
 
         qry.iter().for_each(|q| println!("{:?}", q.shape()));
 
-        let res = store.search(&qry[..], &["Iraq".to_string()], 8, Some(0.36))?;
+        let res = store.search(&qry[..], &["Iraq".to_string()], 8, Some(0.36), true)?;
 
         println!("Response length: {}", res.len());
         res.iter().for_each(|(idx, _, txt, score)| {

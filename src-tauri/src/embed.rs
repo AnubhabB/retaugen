@@ -5,7 +5,7 @@ use candle_core::{DType, Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::stella_en_v5;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-use text_splitter::{ChunkConfig, MarkdownSplitter};
+use text_splitter::{ChunkConfig, TextSplitter};
 use tokenizers::{Encoding, PaddingDirection, PaddingParams, PaddingStrategy, Tokenizer};
 
 use crate::utils::select_device;
@@ -15,7 +15,7 @@ pub struct Embed {
     device: Device,
     model: stella_en_v5::EmbeddingModel,
     tokenizer: Tokenizer,
-    splitter: MarkdownSplitter<Tokenizer>,
+    splitter: TextSplitter<Tokenizer>,
 }
 
 impl Embed {
@@ -61,7 +61,7 @@ impl Embed {
             ..Default::default()
         }));
 
-        let splitter = MarkdownSplitter::new(
+        let splitter = TextSplitter::new(
             ChunkConfig::new(Self::SPLIT_SIZE)
                 .with_sizer(tokenizer.clone())
                 .with_overlap(Self::SPLIT_SIZE / 4)?,
