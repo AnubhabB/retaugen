@@ -306,7 +306,6 @@ impl App {
             })
             .flatten()
             .filter(|j| {
-                println!("{} {}", j.0, j.1);
                 if unq.contains(&j.0) || j.1 < cfg.relevance_cutoff {
                     false
                 } else {
