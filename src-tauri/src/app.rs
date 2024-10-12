@@ -1,36 +1,47 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::create_dir_all,
     path::{Path, PathBuf},
     sync::Arc,
+    time,
 };
 
 use anyhow::{anyhow, Result};
 use candle_core::IndexOp;
-use rayon::slice::ParallelSliceMut;
+use rayon::{
+    iter::{IntoParallelRefIterator, ParallelIterator},
+    slice::ParallelSliceMut,
+};
+use serde::{Deserialize, Serialize};
 use tauri::async_runtime::{self, channel, Mutex, Receiver, RwLock, Sender};
 
 use crate::{
-    docs::files_to_text, embed::Embed, gen::Generator, store::Store, utils::select_device,
+    docs::files_to_text,
+    embed::Embed,
+    gen::Generator,
+    store::{FileKind, Store},
+    utils::select_device,
 };
 
 pub enum Event {
-    Search(String),
+    Search((String, SearchConfig)),
     Index(PathBuf),
+}
+
+pub enum OpResult {
+    Status(String),
+    Result(Option<SearchResult>),
+    Error(String),
 }
 
 #[derive(Clone)]
 pub struct App {
     gen: Arc<Mutex<Option<Generator>>>,
-    send: Sender<Event>,
+    send: Sender<(Sender<OpResult>, Event)>,
     store: Arc<RwLock<Store>>,
     embed: Arc<Mutex<Embed>>,
-    // appdir: PathBuf,
     modeldir: PathBuf,
 }
-
-const MAX_RESULTS: usize = 8;
-const K_ADJACENT: usize = 1;
 
 impl App {
     /// Create a new instance of the app
@@ -65,154 +76,31 @@ impl App {
         Ok(app)
     }
 
-    pub async fn send(&self, e: Event) -> Result<()> {
-        self.send.send(e).await?;
-        Ok(())
+    pub async fn send(&self, e: Event) -> Result<Receiver<OpResult>> {
+        let (s, r) = channel(64);
+        self.send.send((s, e)).await?;
+
+        Ok(r)
     }
 
-    async fn listen(app: Arc<Self>, recv: Receiver<Event>) {
+    async fn listen(app: Arc<Self>, recv: Receiver<(Sender<OpResult>, Event)>) {
         let mut recv = recv;
         while let Some(evt) = recv.recv().await {
-            match evt {
-                Event::Search(qry) => {
-                    if let Err(e) = app.search(&qry).await {
+            match evt.1 {
+                Event::Search((qry, cfg)) => {
+                    if let Err(e) = app.search(&qry, &cfg, evt.0.clone()).await {
                         eprintln!("Error while searching: {e:?}");
+                        evt.0.send(OpResult::Error(e.to_string())).await.unwrap()
                     }
                 }
                 Event::Index(dir) => {
                     if let Err(e) = app.index(dir.as_path()).await {
                         eprintln!("Error while indexing {dir:?}: {e:?}");
+                        evt.0.send(OpResult::Error(e.to_string())).await.unwrap()
                     }
                 }
             }
         }
-    }
-
-    // Trigger the search flow - the search pipeline
-    async fn search(&self, qry: &str) -> Result<()> {
-        let mut gen = self.gen.lock().await;
-        if gen.is_none() {
-            println!("Loading generator ..");
-            *gen = Some(Generator::new(&self.modeldir, &select_device()?)?)
-        }
-
-        let llm = if let Some(gen) = gen.as_mut() {
-            gen
-        } else {
-            return Err(anyhow!("generator not found"));
-        };
-
-        // Step 1: query preprocessing
-        println!("Step 1: query preprocessing ..");
-        let qry_more = llm.query_preproc(qry, 3)?;
-        let (q_txt, q_tensor) = {
-            let queries = qry_more.queries();
-            let mut emb = self.embed.lock().await;
-            let t = emb.query(&queries)?;
-
-            let tensor = (0..queries.len())
-                .map(|i| {
-                    t.i(i)
-                        .unwrap()
-                        .to_device(&candle_core::Device::Cpu)
-                        .unwrap()
-                        .unsqueeze(0)
-                        .unwrap()
-                })
-                .collect::<Vec<_>>();
-
-            (queries, tensor)
-        };
-        println!("{qry_more:?}");
-
-        // Step 2: Approximate nearest neighbor search
-        println!("Step 2: ANN Search ..");
-        let store = self.store.read().await;
-        let res = store.search(
-            &q_tensor,
-            &[qry_more.topic().to_string()],
-            MAX_RESULTS,
-            Some(0.75),
-            false,
-        )?;
-        println!("Step 2: ANN search returned {} results", res.len());
-
-        // Step 3: Check for relevance and re-rank
-        // If we send ALL our response, we'll probably run out of context length
-        // So, let's chunk this
-        println!("Step 3: filtering out relevant results and reranking ..");
-        // Sometimes the LLM ends up returning duplicates, this is to clean them out
-        let mut unq = HashSet::new();
-        let mut relevant = res
-            .chunks(8)
-            .enumerate()
-            .filter_map(|(i, c)| {
-                let batched = c.iter().map(|k| (k.0, k.2.clone())).collect::<Vec<_>>();
-                println!("Relevance: A batch[{i}] begins!");
-                llm.find_relevant(&q_txt, &batched).ok()
-            })
-            .flatten()
-            .filter(|j| {
-                println!("{} {}", j.0, j.1);
-                if unq.contains(&j.0) || j.1 < 5. {
-                    false
-                } else {
-                    unq.insert(j.0);
-                    true
-                }
-            })
-            .collect::<Vec<_>>();
-
-        relevant.par_sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .map_or(std::cmp::Ordering::Equal, |o| o)
-        });
-
-        println!("Step 3: Found {} relevant results", relevant.len());
-
-        let qry_str = q_txt.join("\n");
-        // Step 4: context augmentation - get adjacent data
-        println!("Step 4: getting {K_ADJACENT} adjacent data ..");
-        let context = relevant
-            .iter()
-            .filter_map(|(idx, _)| {
-                let a = store.with_k_adjacent(*idx, K_ADJACENT).ok()?;
-                let txt = [a.0.join("\n").as_str(), &a.1, a.2.join("\n").as_str()].join("\n\n");
-
-                let summary = llm.summarize(&qry_str, &txt).ok()?;
-                let txt = if !summary.heading().is_empty() && !summary.summary().is_empty() {
-                    format!("## {}\n\n\n{}", summary.heading(), summary.summary())
-                } else {
-                    txt
-                };
-                // println!("Before: {:?}", &a.0.len());
-                // println!("This: {:?}", a.1);
-                // println!("After: {:?}", &a.2.len());
-                // let summary_before = if !a.0.is_empty() {
-                //     let s = llm.summarize(&a.0.join("\n\n")).ok()?;
-                //     format!("## {}\n\n{}", s.heading(), s.summary())
-                // } else {
-                //     String::new()
-                // };
-                // let summary_after = if !a.2.is_empty() {
-                //     let s = llm.summarize(&a.2.join("\n\n")).ok()?;
-                //     format!("## {}\n\n{}", s.heading(), s.summary())
-                // } else {
-                //     String::new()
-                // };
-
-                Some(txt)
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-
-        // println!("Context:\n{context}");
-        // Step 5: Finally the answer
-        println!("Step 5: Generating answer ..");
-        let answer = llm.answer(qry_more.topic(), qry_more.source(), &context)?;
-        println!("{answer:?}");
-
-        Ok(())
     }
 
     // Triggers indexing workflow
@@ -277,6 +165,232 @@ impl App {
         writer.insert(&mut f, &mut data)?;
 
         println!("Indexing done ..");
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SearchConfig {
+    with_bm25: bool,
+    max_result: usize,
+    ann_cutoff: Option<f32>,
+    n_sub_qry: usize,
+    k_adjacent: usize,
+    relevance_cutoff: f32,
+}
+
+#[derive(Debug, Serialize, Default)]
+pub struct SearchResult {
+    qry: String,
+    files: Vec<(usize, FileKind)>,
+    evidence: Vec<String>,
+    answer: String,
+}
+
+impl App {
+    // Trigger the search flow - the search pipeline
+    async fn search(
+        &self,
+        qry: &str,
+        cfg: &SearchConfig,
+        res_send: Sender<OpResult>,
+    ) -> Result<()> {
+        let mut final_result = SearchResult {
+            qry: qry.to_string(),
+            ..Default::default()
+        };
+        let mut gen = self.gen.lock().await;
+        res_send
+            .send(OpResult::Status("Loading LLM".to_string()))
+            .await?;
+        if gen.is_none() {
+            *gen = Some(Generator::new(&self.modeldir, &select_device()?)?)
+        }
+
+        let llm = if let Some(gen) = gen.as_mut() {
+            gen
+        } else {
+            return Err(anyhow!("generator not found"));
+        };
+
+        // Step 1: query preprocessing
+        res_send
+            .send(OpResult::Status(format!(
+                "Step 1: Subquery decomposition - generating {} subqueries",
+                cfg.n_sub_qry
+            )))
+            .await?;
+
+        let start = time::Instant::now();
+        let qry_more = llm.query_preproc(qry, cfg.n_sub_qry)?;
+        let (q_txt, q_tensor) = {
+            let queries = qry_more.queries();
+            let mut emb = self.embed.lock().await;
+            let t = emb.query(&queries)?;
+
+            let tensor = (0..queries.len())
+                .map(|i| {
+                    t.i(i)
+                        .unwrap()
+                        .to_device(&candle_core::Device::Cpu)
+                        .unwrap()
+                        .unsqueeze(0)
+                        .unwrap()
+                })
+                .collect::<Vec<_>>();
+
+            (queries, tensor)
+        };
+        res_send
+            .send(OpResult::Status(format!(
+                "Step 1: Generated {} subqueries & topic in {}s\nTopic: {}\nSubqueries:\n{}",
+                q_txt.len(),
+                (time::Instant::now() - start).as_secs_f32(),
+                qry_more.topic(),
+                qry_more.sub_queries().join("\n- ")
+            )))
+            .await?;
+
+        // Step 2: Approximate nearest neighbor search
+        res_send
+            .send(OpResult::Status(format!(
+                "Step 2: Firing Approximate Nearest Neighbour search (BM25: {} | ANN Cutoff: {})",
+                cfg.ann_cutoff.map_or(0., |c| c),
+                cfg.with_bm25
+            )))
+            .await?;
+
+        let store = self.store.read().await;
+        let start = time::Instant::now();
+        let res = store.search(
+            &q_tensor,
+            &[qry_more.topic().to_string()],
+            cfg.max_result,
+            cfg.ann_cutoff,
+            cfg.with_bm25,
+        )?;
+        res_send
+            .send(OpResult::Status(format!(
+                "Step 2: ANN Search yielded {} results in {}s",
+                res.len(),
+                (time::Instant::now() - start).as_secs_f32()
+            )))
+            .await?;
+
+        // Keep initial findings, if the search errors out
+        let mut res_map = HashMap::new();
+        res.iter().for_each(|r| {
+            res_map.insert(r.0, r.1.file().clone());
+            final_result.files.push((r.0, r.1.file().clone()));
+        });
+
+        // Step 3: Check for relevance and re-rank
+        // If we send ALL our response, we'll probably run out of context length
+        // So, let's chunk this
+        // Sometimes the LLM ends up returning duplicates, this is to clean them out
+        let mut unq = HashSet::new();
+        res_send
+            .send(OpResult::Status(
+                "Step 3: Begining Relevance and Reranking pass".to_string(),
+            ))
+            .await?;
+        let start = time::Instant::now();
+        let mut relevant = res
+            .chunks(8)
+            // .enumerate()
+            // .filter_map(|(i, c)| {
+            .filter_map(|c| {
+                let batched = c.par_iter().map(|k| (k.0, k.2.clone())).collect::<Vec<_>>();
+                llm.find_relevant(&q_txt, &batched).ok()
+            })
+            .flatten()
+            .filter(|j| {
+                println!("{} {}", j.0, j.1);
+                if unq.contains(&j.0) || j.1 < cfg.relevance_cutoff {
+                    false
+                } else {
+                    unq.insert(j.0);
+                    true
+                }
+            })
+            .collect::<Vec<_>>();
+
+        res_send
+            .send(OpResult::Status(format!(
+                "Step 3: Filtered {} relevant results in {}s",
+                relevant.len(),
+                (time::Instant::now() - start).as_secs_f32()
+            )))
+            .await?;
+
+        relevant.par_sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .map_or(std::cmp::Ordering::Equal, |o| o)
+        });
+
+        // We have relevant results update our search results files part to weed out the indices that were found not relevant
+        final_result.files = relevant
+            .iter()
+            .map(|(idx, _)| (*idx, res_map.get(idx).unwrap().clone()))
+            .collect::<Vec<_>>();
+
+        let qry_str = q_txt.join("\n");
+        // Step 4: context augmentation - get adjacent data
+        res_send
+            .send(OpResult::Status(format!(
+                "Step 4: Fetching and summarizing {} adjacent data for {} search context",
+                cfg.k_adjacent,
+                relevant.len()
+            )))
+            .await?;
+        let start = time::Instant::now();
+        let context = relevant
+            .iter()
+            .filter_map(|(idx, _)| {
+                let a = store.with_k_adjacent(*idx, cfg.k_adjacent).ok()?;
+                let txt = [a.0.join("\n").as_str(), &a.1, a.2.join("\n").as_str()].join("\n\n");
+
+                let summary = llm.summarize(&qry_str, &txt).ok()?;
+                let txt = if !summary.heading().is_empty() && !summary.summary().is_empty() {
+                    format!("## {}\n\n\n{}", summary.heading(), summary.summary())
+                } else {
+                    txt
+                };
+
+                Some(txt)
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        res_send
+            .send(OpResult::Status(format!(
+                "Step 4: Generated search context in {}s",
+                (time::Instant::now() - start).as_secs_f32()
+            )))
+            .await?;
+
+        // println!("Context:\n{context}");
+        // Step 5: Finally the answer
+        println!("Step 5: Generating answer ..");
+        res_send
+            .send(OpResult::Status(
+                "Step 5: Finally, generating answer".to_string(),
+            ))
+            .await?;
+        let start = time::Instant::now();
+        let answer = llm.answer(qry_more.topic(), qry_more.source(), &context)?;
+        res_send
+            .send(OpResult::Status(format!(
+                "Step 5: generated answer in {}s",
+                (time::Instant::now() - start).as_secs_f32()
+            )))
+            .await?;
+
+        final_result.answer = answer.answer().to_string();
+        final_result.evidence = answer.evidence().to_vec();
+
+        res_send.send(OpResult::Result(Some(final_result))).await?;
 
         Ok(())
     }

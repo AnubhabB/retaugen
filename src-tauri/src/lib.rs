@@ -4,8 +4,8 @@ use std::{
 };
 
 use anyhow::Result;
-use app::App;
-use tauri::Manager;
+use app::{App, OpResult, SearchConfig};
+use tauri::{Emitter, Manager, Window};
 
 mod ann;
 mod app;
@@ -13,7 +13,6 @@ mod docs;
 mod embed;
 mod gen;
 mod layout;
-// mod stella;
 mod store;
 mod utils;
 
@@ -33,10 +32,27 @@ async fn index(app: tauri::State<'_, App>, dir: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn search(app: tauri::State<'_, App>, qry: &str) -> Result<(), String> {
-    app.send(app::Event::Search(qry.to_string()))
+async fn search(
+    window: Window,
+    app: tauri::State<'_, App>,
+    qry: &str,
+    cfg: SearchConfig,
+) -> Result<(), String> {
+    let recv = app
+        .send(app::Event::Search((qry.to_string(), cfg)))
         .await
         .map_err(|e| e.to_string())?;
+
+    tauri::async_runtime::spawn(async move {
+        let mut recv = recv;
+        while let Some(evt) = recv.recv().await {
+            match evt {
+                OpResult::Status(s) => window.emit("status", s).unwrap(),
+                OpResult::Result(s) => window.emit("result", &s).unwrap(),
+                OpResult::Error(e) => window.emit("error", e).unwrap(),
+            }
+        }
+    });
 
     Ok(())
 }

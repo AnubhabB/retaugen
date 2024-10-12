@@ -13,7 +13,7 @@ use tokenizers::Tokenizer;
 // Sampling constants
 const TEMPERATURE: f64 = 0.8;
 const TOP_P: f64 = 0.95;
-const TOP_K: usize = 40;
+const TOP_K: usize = 32;
 
 /// A struct to maintain a initialized Llama quantized `gguf` model and associated methods
 pub struct Generator {
@@ -192,6 +192,16 @@ pub struct GeneratedAnswer {
     answer: String,
 }
 
+impl GeneratedAnswer {
+    pub fn evidence(&self) -> &[String] {
+        &self.evidence[..]
+    }
+
+    pub fn answer(&self) -> &str {
+        &self.answer
+    }
+}
+
 impl Generator {
     /// Given a `query` string and a `context` returns a response
     pub fn answer(&mut self, topic: &str, query: &str, context: &str) -> Result<GeneratedAnswer> {
@@ -211,7 +221,7 @@ Your answer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_hea
         if !tk.ends_with("}") {
             tk = format!("{tk}}}");
         }
-        println!("{:#?}", tk);
+        // println!("{:#?}", tk);
         let a = serde_json::from_str(format!("{{\n  \"evidence\": [{tk}").as_str()).unwrap(); //.map_err(|e| anyhow!(e))
 
         Ok(a)

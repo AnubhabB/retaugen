@@ -52,6 +52,12 @@ pub struct Data {
     indexed: bool,
 }
 
+impl Data {
+    pub fn file(&self) -> &FileKind {
+        &self.file
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum FileKind {
     Html(PathBuf),
