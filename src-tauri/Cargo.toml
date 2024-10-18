@@ -12,27 +12,28 @@ name = "retaugen_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.0.0-rc", features = [] }
+tauri-build = { version = "2", features = [] }
 
 [dependencies]
 anyhow              = "1"
 bincode             = "1"
 bm25                = { version = "0", features = ["parallelism"] }
-candle-core         = { git = "https://github.com/anubhabb/candle.git", branch = "stella", version = "0", features = ["metal"] }
-candle-nn           = { git = "https://github.com/anubhabb/candle.git", branch = "stella", features = ["metal"] }
-candle-transformers = { git = "https://github.com/anubhabb/candle.git", branch = "stella", features = ["metal"] }
+candle-core         = { git = "https://github.com/huggingface/candle.git", branch = "main", version = "0", features = ["metal"] }
+candle-nn           = { git = "https://github.com/huggingface/candle.git", branch = "main", features = ["metal"] }
+candle-transformers = { git = "https://github.com/huggingface/candle.git", branch = "main", features = ["metal"] }
 dashmap             = { version = "6", features = ["rayon"] }
 image               = { version = "0", default-features = false, features = ["rayon", "jpeg"] }
 ort                 = { version = "2.0.0-rc.6" }
 pdfium-render       = { version = "0" }
 rand                = "0"
 rayon               = "1"
-tauri               = { version = "2.0.0-rc", features = [] }
-tauri-plugin-shell  = "2.0.0-rc"
+tauri               = { version = "2", features = [] }
+tauri-plugin-shell  = "2"
 text-splitter       = { version = "0", features = ["tokenizers", "markdown"] }
+# tokio               = { version = "1", features = ["sync"] }
 serde               = { version = "1", features = ["derive"] }
 serde_json          = "1"
 tokenizers          = "0"
-tauri-plugin-fs = "2.0.0-rc.5"
-tauri-plugin-dialog = "2.0.0-rc.7"
+tauri-plugin-fs = "2"
+tauri-plugin-dialog = "2"
 

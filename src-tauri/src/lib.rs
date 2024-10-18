@@ -39,20 +39,22 @@ async fn search(
     cfg: SearchConfig,
 ) -> Result<(), String> {
     let recv = app
-        .send(app::Event::Search((qry.to_string(), cfg)))
+        .send(app::Event::Search((qry.to_string(), cfg, window)))
         .await
         .map_err(|e| e.to_string())?;
 
-    tauri::async_runtime::spawn(async move {
-        let mut recv = recv;
-        while let Some(evt) = recv.recv().await {
-            match evt {
-                OpResult::Status(s) => window.emit("status", s).unwrap(),
-                OpResult::Result(s) => window.emit("result", &s).unwrap(),
-                OpResult::Error(e) => window.emit("error", e).unwrap(),
-            }
-        }
-    });
+    // tauri::async_runtime::spawn(async move {
+    //     let mut recv = recv;
+    //     while let Some(evt) = recv.recv().await {
+    //         println!("Received an event!");
+
+    //         match evt {
+    //             OpResult::Status(s) => window.emit("status", s).unwrap(),
+    //             OpResult::Result(s) => window.emit("result", &s).unwrap(),
+    //             OpResult::Error(e) => window.emit("error", e).unwrap(),
+    //         }
+    //     }
+    // });
 
     Ok(())
 }
@@ -65,7 +67,10 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             // init our app
-            let state = App::new(app.path().app_data_dir()?.as_path(), Path::new("../models"))?;
+            let state = App::new(
+                app.path().app_data_dir()?.as_path(),
+                Path::new("../models")
+            ).unwrap();
             app.manage(state);
 
             Ok(())

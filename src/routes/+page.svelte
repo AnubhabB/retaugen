@@ -61,8 +61,10 @@
     let window = getCurrentWindow();
     window.listen("status", ({ payload}) => {
       let s = (payload as string).replaceAll("\n", "<br>");
-      logs.push(s);
-      logs = [...logs];
+      console.log("Comes here ..");
+      let l = [...logs];
+      l.push(s);
+      logs = l;
     })
 
     window.listen("result", ({ event, payload}) => {
