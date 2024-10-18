@@ -1,9 +1,9 @@
 // This file is heavily copied from https://github.com/styrowolf/layoutparser-ort/blob/master/src/models/detectron2.rs Licensed Apache 2.0
 // Simplified for our case
 
-use std::{fmt::Display, path::Path};
+use std::{collections::{HashMap, HashSet}, fmt::Display, path::Path};
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use candle_core::{DType, Device, Tensor};
 use image::imageops;
 use ort::{GraphOptimizationLevel, Session, SessionOutputs};
@@ -61,7 +61,7 @@ impl RegionOfInterest {
 
 /// A [`Detectron2`](https://github.com/facebookresearch/detectron2)-based model.
 pub struct Detectron2Model {
-    model: Session,
+    model: candle_onnx::onnx::ModelProto,
     label_map: [DetectedElem; 5],
 }
 
@@ -81,15 +81,16 @@ impl Detectron2Model {
 
     pub fn new(path: &Path) -> Result<Self> {
         // Loading and initializing the model from `onnx` file
-        let model = Session::builder()?
-            .with_optimization_level(GraphOptimizationLevel::Level3)?
-            // We could make this a little more generic with `numcpus` crate
-            .with_intra_threads(8)?
-            .commit_from_file(path.join("layout.onnx"))?;
-
+        // let model = Session::builder()?
+        //     .with_optimization_level(GraphOptimizationLevel::Level3)?
+        //     // We could make this a little more generic with `numcpus` crate
+        //     .with_intra_threads(8)?
+        //     .commit_from_file(path.join("layout.onnx"))?;
+        let model = candle_onnx::read_file(path.join("layout.onnx")).map_err(|e| anyhow!(e))?;
+        // let graph = model.graph()
         // You could print the model outputs to figure out which prediction datapoints are useful
         // println!("{:?}", model.outputs);
-
+        // todo!()
         Ok(Self {
             model,
             label_map: [
@@ -104,17 +105,27 @@ impl Detectron2Model {
 
     pub fn predict(&self, page: &image::DynamicImage) -> Result<Vec<RegionOfInterest>> {
         let (img_width, img_height, input) = self.preprocess(page)?;
-        // let hm = HashMap::from([("x.1".to_string(), input)]);
-        let res = self.model.run(ort::inputs!["x.1" => input]?)?;
+        let graph = self.model.graph.as_ref().unwrap();
+        let mut ops = graph.node.iter().map(|n| {
+            n.op_type.clone()
+        }).collect::<HashSet<_>>().iter().cloned().collect::<Vec<_>>();
+        ops.sort();
+        println!("{ops:?}");
+        let hm = HashMap::from([(graph.input[0].name.to_string(), input)]);
+        let mut outputs = candle_onnx::simple_eval(&self.model, hm)?;
+        println!("{outputs:?}");
+        // // let hm = HashMap::from([("x.1".to_string(), input)]);
+        // let res = self.model.run(ort::inputs!["x.1" => input]?)?;
 
-        self.postprocess(res, img_width, img_height)
+        // self.postprocess(res, img_width, img_height)
+        todo!()
     }
 
     // 1. Resizes an image to the required format!
     // 2. Creates a tensor from the image
     // 3. Reshapes the tensor to channel first format
     // 4. Creates input ndarray for `ort` to consume
-    fn preprocess(&self, img: &image::DynamicImage) -> Result<(u32, u32, ort::Value)> {
+    fn preprocess(&self, img: &image::DynamicImage) -> Result<(u32, u32, Tensor)> {
         // TODO: re-visit this and resize smarter
         let (img_width, img_height) = (img.width(), img.height());
         let img = img.resize_exact(
@@ -132,16 +143,16 @@ impl Detectron2Model {
             &Device::Cpu,
         )?
         .to_dtype(DType::F32)?
-        .permute((2, 0, 1))? // shape: [3, height, width]
-        .to_vec3::<f32>()?
-        .concat()
-        .concat();
+        .permute((2, 0, 1))?; // shape: [3, height, width]
+        // .to_vec3::<f32>()?
+        // .concat()
+        // .concat();
 
         // Create a `ndarray` input for `ort` runtime to consume
-        let input =
-            ort::Value::from_array(([3, Self::REQUIRED_HEIGHT, Self::REQUIRED_WIDTH], &t[..]))?;
+        // let input =
+        //     ort::Value::from_array(([3, Self::REQUIRED_HEIGHT, Self::REQUIRED_WIDTH], &t[..]))?;
 
-        Ok((img_width, img_height, input.into()))
+        Ok((img_width, img_height, t))
     }
 
     // Reads the predictions and converts them to regions of interest

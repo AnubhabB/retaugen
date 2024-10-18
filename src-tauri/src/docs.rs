@@ -167,7 +167,7 @@ mod tests {
     #[test]
     fn extract_from_pdf() -> Result<()> {
         let files =
-            &[Path::new("../test-data/prehistory/origins-of-agriculture.pdf").to_path_buf()];
+            &[Path::new("../test-data/prehistory/agri-s.pdf").to_path_buf()];
         let results = files_to_text(Path::new("../models"), files)?;
 
         assert!(!results.is_empty());
