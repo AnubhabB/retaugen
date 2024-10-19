@@ -4,8 +4,8 @@ use std::{
 };
 
 use anyhow::Result;
-use app::{App, OpResult, SearchConfig};
-use tauri::{Emitter, Manager, Window};
+use app::{App, SearchConfig};
+use tauri::{Manager, Window};
 
 mod ann;
 mod app;
@@ -38,8 +38,7 @@ async fn search(
     qry: &str,
     cfg: SearchConfig,
 ) -> Result<(), String> {
-    let recv = app
-        .send(app::Event::Search((qry.to_string(), cfg, window)))
+    app.send(app::Event::Search((qry.to_string(), cfg, window)))
         .await
         .map_err(|e| e.to_string())?;
 
@@ -67,10 +66,8 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             // init our app
-            let state = App::new(
-                app.path().app_data_dir()?.as_path(),
-                Path::new("../models")
-            ).unwrap();
+            let state =
+                App::new(app.path().app_data_dir()?.as_path(), Path::new("../models")).unwrap();
             app.manage(state);
 
             Ok(())

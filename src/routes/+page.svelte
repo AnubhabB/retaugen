@@ -2,16 +2,9 @@
   import { open } from '@tauri-apps/plugin-dialog';
   import { invoke } from "@tauri-apps/api/core";
   import { getCurrentWindow } from '@tauri-apps/api/window';
-    import { onMount } from 'svelte';
-
-  interface SearchConfig {
-    with_bm25: boolean,
-    max_result: number,
-    ann_cutoff: number,
-    n_sub_qry: number,
-    k_adjacent: number,
-    relevance_cutoff: number,
-  }
+  import { onMount } from 'svelte';
+  import type { SearchConfig, SearchResult, StatusData } from './types';
+    import Search from './Search.svelte';
 
   let searchCfg: SearchConfig = {
     with_bm25: true,
@@ -22,9 +15,19 @@
     relevance_cutoff: 5.,
   };
 
-  let search: string;
+  let search: string,
+    searching: boolean = false;
 
-  let logs: string[] = [];
+  let logs: StatusData[] = [];
+
+  let searches: SearchResult[] = [];
+  // [{
+  //   qry: "Some awesome search query!",
+  //   files: [],
+  //   evidence: ["Some long evidence text which can make a lot of difference", "More evidence here"],
+  //   answer: "Some long gemini style answer",
+  //   cfg: searchCfg
+  // }];
 
   const folderPicker = async () => {
     const dir = await open({
@@ -43,37 +46,51 @@
   }
 
   const doSearch = async () => {
-    logs = [];
     let s = search.trim();
     if(s.length <= 3) {
       return;
     }
 
+    searching = true;
+    logs = [];
+    searches = [{
+      qry: s,
+      files: [],
+      evidence: [],
+      answer: "",
+      cfg: searchCfg
+    }, ...searches];
     try {
       invoke("search", { qry: s, cfg: searchCfg })
     } catch(e) {
       console.error(`Error requesting search with qry: ${s}, error: `, e);
+      searching = false;
     }
   }
 
   onMount(() => {
-    console.log("Window ready!");
     let window = getCurrentWindow();
-    window.listen("status", ({ payload}) => {
-      let s = (payload as string).replaceAll("\n", "<br>");
-      console.log("Comes here ..");
+    window.listen("status", ({ payload }) => {
+      let s: StatusData = payload as StatusData; 
       let l = [...logs];
       l.push(s);
       logs = l;
-    })
+    });
 
-    window.listen("result", ({ event, payload}) => {
-      console.log(event, payload)
-    })
+    window.listen("result", ({ payload}) => {
+      console.log(payload);
+      let s: SearchResult = payload as SearchResult;
+      console.log(s);
+      s.cfg = searchCfg;
+      searches[0] = s;
+      searches = [...searches];
+      searching = false;
+    });
 
     window.listen("error", ({ event, payload}) => {
-      console.log(event, payload)
-    })
+      console.log(event, payload);
+      searching = false;
+    });
   })
 
 </script>
@@ -94,12 +111,31 @@
     </div>
     <button class="ml-auto button blue" on:click={folderPicker}>+ 📂</button>
   </div>
-  <div class="grid grid-cols-[60%_40%]">
-    <div></div>
-    <div class="flex flex-col">
-      {#each logs as log}
-        <div>{@html log}</div>
+  <div class="grid grid-cols-[60%_40%] px-8">
+    <div class="flex flex-col gap-4">
+      {#each searches as search, i}
+        <Search {search} searching={i == 0 ? searching : false}/>
       {/each}
     </div>
+    {#if logs.length}
+      <div class="flex flex-col">
+        <div class="text-md mb-2">Logs</div>
+        {#each logs as log, i}
+          <div class="flex flex-col mb-4 gap-2">
+            <div class="flex flex-row items-center">
+              <div class="text-sm font-medium">{i + 1}. {log.head}</div>
+              {#if log.time_s || log.time_s == 0}
+              <div class="text-xs font-bold ml-auto text-green-400 px-2">{ Math.round(log.time_s * 100) / 100 }s</div>
+              {/if}
+            </div>
+            {#if log.body.length}
+              <div class="text-xs">
+                {@html log.body.replaceAll("\n", "<br>")}
+              </div>
+            {/if}
+          </div>
+        {/each}
+      </div>
+    {/if}
   </div>
 </div>
