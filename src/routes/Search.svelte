@@ -15,7 +15,7 @@
         {#if searching}
             <div>Searching ..</div>
         {/if}
-        <div class="text-md">{search.answer || searching ? "" : "Not Found"}</div>
+        <div class="text-md">{ searching ?  "" : search.answer || "Not Found"}</div>
         {#if search.answer.length && !search.evidence.length}
             <div class="text-red-400 text-sm font-bold">This answer was generated without evidence!</div>
         {/if}

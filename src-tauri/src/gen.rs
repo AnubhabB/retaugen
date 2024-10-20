@@ -1,7 +1,7 @@
 use std::{path::Path, time::Instant};
 
 use anyhow::{anyhow, Result};
-use candle_core::{DType, Device, Tensor};
+use candle_core::{DType, Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::{
     generation::{LogitsProcessor, Sampling},
@@ -71,6 +71,21 @@ impl Generator {
         })
     }
 
+    fn sample(logits: &Tensor) -> Result<u32> {
+        // Apply temperature
+        let t = candle_nn::ops::softmax_last_dim(
+            &(logits.squeeze(0)?.to_dtype(DType::F32)? / TEMPERATURE)?
+        )?;
+        // Now, select `TOP_K`
+        let idx= t.arg_sort_last_dim(false)?.i(.. TOP_K)?;
+        // Let's go for `TOP_P` now
+
+        // let mut arng = Tensor::arange(0_i64, t.dims1()? as i64, t.device())?;
+        // arng.args
+        println!("{:?} {}", t.shape(), idx);
+        Ok(0)
+    }
+
     // A utility function to load the model and tokenizer
     fn load_model(model_dir: &Path, device: &Device) -> Result<(Llama, Config, Tokenizer)> {
         // let model_file = model_dir.join(Self::MODEL_FILE);
@@ -115,6 +130,7 @@ impl Generator {
 
         // The forward pass to the first token
         let mut logits = self.model.forward(&ip, 0, &mut cache)?;
+        let _ = Self::sample(&logits)?;
 
         // Sampling the first token
         let mut next = self.sampler.sample(&logits.squeeze(0)?)?;
@@ -144,7 +160,7 @@ impl Generator {
         println!(
             "{} tokens generated @ {}t/s",
             all_tokens.len() - 1,
-            (all_tokens.len() - 1) as f32 / (std::time::Instant::now() - start).as_secs() as f32
+            (all_tokens.len() - 1) as f32 / (std::time::Instant::now() - start).as_secs_f32()
         );
 
         // Decode tokens and return result
@@ -307,6 +323,7 @@ mod tests {
     use std::path::Path;
 
     use anyhow::Result;
+    use candle_core::{IndexOp, Tensor};
 
     use crate::utils::select_device;
 
@@ -366,6 +383,20 @@ mod tests {
         )?;
 
         println!("{ans:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn argsort() -> Result<()> {
+        let d = Tensor::rand(-256_f32, 255., (1, 2048), &candle_core::Device::new_metal(0)?)?;
+        println!("{d}");
+        let i = d.arg_sort_last_dim(true)?;
+        println!("{i}");
+
+        // let d = Tensor::rand(-256_f32, 255., 12, &candle_core::Device::new_metal(0)?)?;
+        // println!("{d}");
+        // let idx = d.arg_sort_last_dim(false)?;
+        // println!("{}", idx.i(..64)?);
         Ok(())
     }
 }

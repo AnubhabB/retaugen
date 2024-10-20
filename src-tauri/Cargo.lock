@@ -627,7 +627,6 @@ dependencies = [
 [[package]]
 name = "candle-core"
 version = "0.7.2"
-source = "git+https://github.com/huggingface/candle.git?branch=main#7c09215ef443256523d2de2579db56d1b59fd683"
 dependencies = [
  "byteorder",
  "candle-metal-kernels",
@@ -649,7 +648,6 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.7.2"
-source = "git+https://github.com/huggingface/candle.git?branch=main#7c09215ef443256523d2de2579db56d1b59fd683"
 dependencies = [
  "metal",
  "once_cell",
@@ -660,7 +658,6 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.7.2"
-source = "git+https://github.com/huggingface/candle.git?branch=main#7c09215ef443256523d2de2579db56d1b59fd683"
 dependencies = [
  "candle-core",
  "candle-metal-kernels",
@@ -676,7 +673,6 @@ dependencies = [
 [[package]]
 name = "candle-transformers"
 version = "0.7.2"
-source = "git+https://github.com/huggingface/candle.git?branch=main#7c09215ef443256523d2de2579db56d1b59fd683"
 dependencies = [
  "byteorder",
  "candle-core",
@@ -4258,7 +4254,7 @@ dependencies = [
  "image",
  "ort",
  "pdfium-render",
- "rand 0.8.5",
+ "rand 0.7.3",
  "rayon",
  "serde",
  "serde_json",
@@ -6198,7 +6194,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

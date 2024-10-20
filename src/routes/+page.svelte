@@ -78,9 +78,7 @@
     });
 
     window.listen("result", ({ payload}) => {
-      console.log(payload);
       let s: SearchResult = payload as SearchResult;
-      console.log(s);
       s.cfg = searchCfg;
       searches[0] = s;
       searches = [...searches];
@@ -118,7 +116,7 @@
       {/each}
     </div>
     {#if logs.length}
-      <div class="flex flex-col">
+      <div class="flex flex-col px-4">
         <div class="text-md mb-2">Logs</div>
         {#each logs as log, i}
           <div class="flex flex-col mb-4 gap-2">
