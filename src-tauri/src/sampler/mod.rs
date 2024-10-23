@@ -3,13 +3,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use anyhow::Result;
 use candle_core::{Device, IndexOp, Tensor};
 use rand::{prelude::Distribution, SeedableRng};
-use rayon::{iter::{IntoParallelRefIterator, ParallelIterator}, slice::ParallelSliceMut};
+use rayon::{iter::{IntoParallelRefIterator, ParallelIterator}, slice::{ParallelSlice, ParallelSliceMut}};
 
 pub struct Sampler {
     temperature: f64,
     top_p: f32,
     top_k: usize,
-    idx_list: Vec<u32>
+    idx_list: Vec<usize>
 }
 
 pub struct AtomicF32 {
@@ -35,7 +35,9 @@ impl Sampler {
         let tk = Tensor::arange(0, vocab_size as u32, dev)
             .unwrap()
             .to_vec1::<u32>()
-            .unwrap();
+            .unwrap()
+            .par_iter().map(|&i| i as usize)
+            .collect::<Vec<_>>();
 
         Self {
             temperature,
@@ -54,32 +56,41 @@ impl Sampler {
         //     Device::Cpu => 
                 let rest = t.to_vec1::<f32>()?;
                 // Sort indices based on their corresponding values
-                idxt.par_sort_unstable_by(|&a, &b| {
-                    rest[b as usize].partial_cmp(&rest[a as usize]).unwrap_or(std::cmp::Ordering::Equal)
-                });
+                // idxt.par_sort_unstable_by(|&a, &b| {
+                //     rest[b].total_cmp(&rest[a])
+                // });
+                // idxt.as_parallel_slice().nth
+                let (indices, _, _) =
+                idxt.as_parallel_slice_mut().select_nth_unstable_by(self.top_k, |&i, &j| rest[j].total_cmp(&rest[i]));
             // }
             // Device::Cuda(_) => {}
             // Device::Metal(_) => {}
         // }
         let top_p_impl = AtomicF32::new(0.);
-        let idxs = idxt[0 .. self.top_k].par_iter().copied()
+        let mut idxs = idxt[0 .. self.top_k].par_iter().copied()
                 .take_any_while(|&t| {
-                    let v = rest[t as usize];
+                    let v = rest[t];
                     let p = top_p_impl.load(Ordering::Relaxed) + v;
 
                     top_p_impl.store(p, Ordering::Relaxed);
 
                     p <= self.top_p
-                })
-                .map(|t| t as usize)
-                .collect::<Vec<_>>();
-        
+                }).collect::<Vec<_>>();
+        // println!("Me: {}", idxs.len());
+        // A minor hack here!
+        // let prs = if idxs.is_empty() {
+        //     idxt[ .. 32].par_iter().map(|&i| rest[i as usize]).collect::<Vec<_>>()
+        // } else {
+        //     
+        // };
+        if idxs.is_empty() {
+            idxs = idxt[.. 32].to_vec();
+        }
+
         let prs = idxs.par_iter().map(|&i| rest[i]).collect::<Vec<_>>();
         let fidx = Self::sample_multinomial(&prs)?;
         
-        Ok(
-            idxs[fidx as usize] as u32
-        )
+        Ok( idxs[fidx as usize] as u32 )
     }
 
     fn sample_multinomial(v: &Vec<f32>) -> Result<u32> {

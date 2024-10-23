@@ -129,6 +129,7 @@ impl Generator {
 
         // Sampling the first token
         let mut next = self.sampler.sample(&logits.squeeze(0)?)?;
+        // let mut next = self.sample(&logits)?;
         println!("S2: [{s}] S1[{next}]");
         println!(
             "{} prompt tokens processed @ {}t/s",
@@ -153,6 +154,7 @@ impl Generator {
                 }
             };
             next = self.sampler.sample(&logits.squeeze(0)?).unwrap();
+            // next = self.sample(&logits)?;
             println!("S2: [{s2}] S1[{next}]");
             if self.stop_tokens.contains(&next) {
                 break;
