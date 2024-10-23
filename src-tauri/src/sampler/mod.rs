@@ -56,12 +56,12 @@ impl Sampler {
         //     Device::Cpu => 
                 let rest = t.to_vec1::<f32>()?;
                 // Sort indices based on their corresponding values
-                // idxt.par_sort_unstable_by(|&a, &b| {
-                //     rest[b].total_cmp(&rest[a])
-                // });
+                idxt.par_sort_unstable_by(|&a, &b| {
+                    rest[b].total_cmp(&rest[a])
+                });
                 // idxt.as_parallel_slice().nth
-                let (indices, _, _) =
-                idxt.as_parallel_slice_mut().select_nth_unstable_by(self.top_k, |&i, &j| rest[j].total_cmp(&rest[i]));
+                // let (indices, _, _) =
+                // idxt.as_parallel_slice_mut().select_nth_unstable_by(self.top_k, |&i, &j| rest[j].total_cmp(&rest[i]));
             // }
             // Device::Cuda(_) => {}
             // Device::Metal(_) => {}
