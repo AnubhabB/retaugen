@@ -10,6 +10,8 @@ use candle_transformers::{
 use serde::Deserialize;
 use tokenizers::Tokenizer;
 
+use crate::sampler::Sampler;
+
 // Sampling constants
 const TEMPERATURE: f64 = 0.8;
 const TOP_P: f64 = 0.95;
@@ -23,6 +25,7 @@ pub struct Generator {
     model: Llama,
     tokenizer: Tokenizer,
     sampler: LogitsProcessor,
+    sampler2: Sampler,
     stop_tokens: [u32; 2],
 }
 
@@ -59,7 +62,7 @@ impl Generator {
                 temperature: TEMPERATURE,
             },
         );
-
+        let sampler2 = Sampler::new(TEMPERATURE, TOP_P as f32, TOP_K, cfg.vocab_size, &device);
         println!("Llama ready!");
         Ok(Self {
             cfg,
@@ -67,23 +70,15 @@ impl Generator {
             model,
             tokenizer,
             sampler,
+            sampler2,
             stop_tokens,
         })
     }
 
-    fn sample(logits: &Tensor) -> Result<u32> {
-        // Apply temperature
-        let t = candle_nn::ops::softmax_last_dim(
-            &(logits.squeeze(0)?.to_dtype(DType::F32)? / TEMPERATURE)?
-        )?;
-        // Now, select `TOP_K`
-        let idx= t.arg_sort_last_dim(false)?.i(.. TOP_K)?;
-        // Let's go for `TOP_P` now
-
-        // let mut arng = Tensor::arange(0_i64, t.dims1()? as i64, t.device())?;
-        // arng.args
-        println!("{:?} {}", t.shape(), idx);
-        Ok(0)
+    fn sample(&mut self, logits: &Tensor) -> Result<u32> {
+        println!("Logits: {:?}", logits.shape());
+        // let smpl = Sampler::new(TEMPERATURE, TOP_P as f32, TOP_K);
+        self.sampler2.sample(&logits.squeeze(0)?)
     }
 
     // A utility function to load the model and tokenizer
@@ -130,10 +125,11 @@ impl Generator {
 
         // The forward pass to the first token
         let mut logits = self.model.forward(&ip, 0, &mut cache)?;
-        let _ = Self::sample(&logits)?;
+        let s = self.sample(&logits)?;
 
         // Sampling the first token
         let mut next = self.sampler.sample(&logits.squeeze(0)?)?;
+        println!("S2: [{s}] S1[{next}]");
         println!(
             "{} prompt tokens processed @ {}t/s",
             input.len(),
@@ -149,8 +145,15 @@ impl Generator {
             ip = Tensor::new(&[next], &self.device)?.unsqueeze(0)?;
 
             logits = self.model.forward(&ip, i, &mut cache)?;
-            next = self.sampler.sample(&logits.squeeze(0)?)?;
-
+            let s2 = match self.sample(&logits) {
+                Ok(d) => d,
+                Err(e) => {
+                    println!("Apna sampling err: {e:?}");
+                    0
+                }
+            };
+            next = self.sampler.sample(&logits.squeeze(0)?).unwrap();
+            println!("S2: [{s2}] S1[{next}]");
             if self.stop_tokens.contains(&next) {
                 break;
             }

@@ -13,6 +13,7 @@ mod docs;
 mod embed;
 mod gen;
 mod layout;
+mod sampler;
 mod store;
 mod utils;
 
