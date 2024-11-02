@@ -13,7 +13,7 @@ mod docs;
 mod embed;
 mod gen;
 mod layout;
-mod sampler;
+// mod sampler;
 mod store;
 mod utils;
 
@@ -42,19 +42,6 @@ async fn search(
     app.send(app::Event::Search((qry.to_string(), cfg, window)))
         .await
         .map_err(|e| e.to_string())?;
-
-    // tauri::async_runtime::spawn(async move {
-    //     let mut recv = recv;
-    //     while let Some(evt) = recv.recv().await {
-    //         println!("Received an event!");
-
-    //         match evt {
-    //             OpResult::Status(s) => window.emit("status", s).unwrap(),
-    //             OpResult::Result(s) => window.emit("result", &s).unwrap(),
-    //             OpResult::Error(e) => window.emit("error", e).unwrap(),
-    //         }
-    //     }
-    // });
 
     Ok(())
 }
