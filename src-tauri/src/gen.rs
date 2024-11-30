@@ -1,7 +1,7 @@
 use std::{path::Path, time::Instant};
 
 use anyhow::{anyhow, Result};
-use candle_core::{DType, Device, IndexOp, Tensor};
+use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::{
     generation::{LogitsProcessor, Sampling},
@@ -9,8 +9,6 @@ use candle_transformers::{
 };
 use serde::Deserialize;
 use tokenizers::Tokenizer;
-
-use crate::sampler::Sampler;
 
 // Sampling constants
 const TEMPERATURE: f64 = 0.8;
@@ -25,7 +23,7 @@ pub struct Generator {
     model: Llama,
     tokenizer: Tokenizer,
     sampler: LogitsProcessor,
-    sampler2: Sampler,
+    // sampler2: Sampler,
     stop_tokens: [u32; 2],
 }
 
@@ -62,7 +60,7 @@ impl Generator {
                 temperature: TEMPERATURE,
             },
         );
-        let sampler2 = Sampler::new(TEMPERATURE, TOP_P as f32, TOP_K, cfg.vocab_size, &device);
+        // let sampler2 = Sampler::new(TEMPERATURE, TOP_P as f32, TOP_K, cfg.vocab_size, &device);
         println!("Llama ready!");
         Ok(Self {
             cfg,
@@ -70,16 +68,16 @@ impl Generator {
             model,
             tokenizer,
             sampler,
-            sampler2,
+            // sampler2,
             stop_tokens,
         })
     }
 
-    fn sample(&mut self, logits: &Tensor) -> Result<u32> {
-        println!("Logits: {:?}", logits.shape());
-        // let smpl = Sampler::new(TEMPERATURE, TOP_P as f32, TOP_K);
-        self.sampler2.sample(&logits.squeeze(0)?)
-    }
+    // fn sample(&mut self, logits: &Tensor) -> Result<u32> {
+    //     println!("Logits: {:?}", logits.shape());
+    //     // let smpl = Sampler::new(TEMPERATURE, TOP_P as f32, TOP_K);
+    //     self.sampler2.sample(&logits.squeeze(0)?)
+    // }
 
     // A utility function to load the model and tokenizer
     fn load_model(model_dir: &Path, device: &Device) -> Result<(Llama, Config, Tokenizer)> {
@@ -125,12 +123,12 @@ impl Generator {
 
         // The forward pass to the first token
         let mut logits = self.model.forward(&ip, 0, &mut cache)?;
-        let s = self.sample(&logits)?;
+        // let s = self.sample(&logits)?;
 
         // Sampling the first token
         let mut next = self.sampler.sample(&logits.squeeze(0)?)?;
         // let mut next = self.sample(&logits)?;
-        println!("S2: [{s}] S1[{next}]");
+        // println!("S2: [{s}] S1[{next}]");
         println!(
             "{} prompt tokens processed @ {}t/s",
             input.len(),
@@ -146,16 +144,16 @@ impl Generator {
             ip = Tensor::new(&[next], &self.device)?.unsqueeze(0)?;
 
             logits = self.model.forward(&ip, i, &mut cache)?;
-            let s2 = match self.sample(&logits) {
-                Ok(d) => d,
-                Err(e) => {
-                    println!("Apna sampling err: {e:?}");
-                    0
-                }
-            };
+            // let s2 = match self.sample(&logits) {
+            //     Ok(d) => d,
+            //     Err(e) => {
+            //         println!("Apna sampling err: {e:?}");
+            //         0
+            //     }
+            // };
             next = self.sampler.sample(&logits.squeeze(0)?).unwrap();
             // next = self.sample(&logits)?;
-            println!("S2: [{s2}] S1[{next}]");
+            // println!("S2: [{s2}] S1[{next}]");
             if self.stop_tokens.contains(&next) {
                 break;
             }
@@ -328,7 +326,7 @@ mod tests {
     use std::path::Path;
 
     use anyhow::Result;
-    use candle_core::{IndexOp, Tensor};
+    use candle_core::Tensor;
 
     use crate::utils::select_device;
 
@@ -393,7 +391,12 @@ mod tests {
 
     #[test]
     fn argsort() -> Result<()> {
-        let d = Tensor::rand(-256_f32, 255., (1, 2048), &candle_core::Device::new_metal(0)?)?;
+        let d = Tensor::rand(
+            -256_f32,
+            255.,
+            (1, 2048),
+            &candle_core::Device::new_metal(0)?,
+        )?;
         println!("{d}");
         let i = d.arg_sort_last_dim(true)?;
         println!("{i}");
