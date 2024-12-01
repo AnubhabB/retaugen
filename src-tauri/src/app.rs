@@ -418,7 +418,9 @@ impl App {
         // We have relevant results update our search results files part to weed out the indices that were found not relevant
         final_result.files = relevant
             .iter()
-            .map(|(idx, _)| (*idx, res_map.get(idx).unwrap().clone()))
+            .filter_map(|(idx, _)| {
+                res_map.get(idx).map(|f| (*idx, f.clone()))
+            })
             .collect::<Vec<_>>();
 
         println!("{:?}", final_result.files);

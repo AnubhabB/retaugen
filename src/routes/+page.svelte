@@ -64,7 +64,7 @@
       invoke("search", { qry: s, cfg: searchCfg })
     } catch(e) {
       console.error(`Error requesting search with qry: ${s}, error: `, e);
-      searching = false;
+      setSearchFalse();
     }
   }
 
@@ -82,14 +82,19 @@
       s.cfg = searchCfg;
       searches[0] = s;
       searches = [...searches];
-      searching = false;
+      setSearchFalse();
     });
 
     window.listen("error", ({ event, payload}) => {
       console.log(event, payload);
-      searching = false;
+      setSearchFalse();
     });
   })
+
+const setSearchFalse = () => {
+  searching = false;
+  search = "";
+}
 
 </script>
 

@@ -1,5 +1,6 @@
 <script lang="ts">
-    import type { SearchResult } from "./types";
+    import Thumb from "./Thumb.svelte";
+import type { SearchResult } from "./types";
 
     export let search: SearchResult,
         searching: boolean = false;
@@ -16,7 +17,7 @@
             <div>Searching ..</div>
         {/if}
         <div class="text-md">{ searching ?  "" : search.answer || "Not Found"}</div>
-        {#if search.answer.length && !search.evidence.length}
+        {#if search.answer.length && (!search.evidence.length || !search.files.length)}
             <div class="text-red-400 text-sm font-bold">This answer was generated without evidence!</div>
         {/if}
         {#if search.evidence.length}
@@ -32,9 +33,11 @@
         {#if search.files.length}
         <div class="flex flex-col py-2">
             <div class="text-sm font-bold text-gray-400">Files</div>
-            <div class="flex flex-row">
+            <div class="flex flex-row gap-2">
                 {#each search.files as f }
-                    <div class="aspect-square overflow-hidden">sf</div>
+                    <div class="aspect-square overflow-hidden w-24">
+                        <Thumb path={f[1]}/>
+                    </div>
                 {/each}
             </div>
         </div>
