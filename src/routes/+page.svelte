@@ -4,7 +4,7 @@
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { onMount } from 'svelte';
   import type { SearchConfig, SearchResult, StatusData } from './types';
-    import Search from './Search.svelte';
+  import Search from './Search.svelte';
 
   let searchCfg: SearchConfig = {
     with_bm25: true,
@@ -108,8 +108,11 @@ const setSearchFalse = () => {
           placeholder="Type something and press Enter" bind:value={search} on:keyup={(kc) => { if(kc.key == "Enter") { doSearch() } }}
           >
       </div>
-      <div class="flex flex-row gap-2">
-
+      <div class="flex flex-row gap-2 items-center py-1">
+        <div class="flex flex-row gap-1 items-center">
+          <span class="text-xs">BM25</span>
+          <input type="checkbox" bind:checked={searchCfg.with_bm25}/>
+        </div>
       </div>
     </div>
     <button class="ml-auto button blue" on:click={folderPicker}>+ 📂</button>

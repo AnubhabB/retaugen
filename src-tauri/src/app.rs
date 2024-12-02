@@ -413,19 +413,8 @@ impl App {
         )
         .await?;
 
-        println!("{:?}", final_result.files);
-
-        // We have relevant results update our search results files part to weed out the indices that were found not relevant
-        final_result.files = relevant
-            .iter()
-            .filter_map(|(idx, _)| {
-                res_map.get(idx).map(|f| (*idx, f.clone()))
-            })
-            .collect::<Vec<_>>();
-
-        println!("{:?}", final_result.files);
-
         // Step 4: context augmentation - get adjacent data
+        // We have relevant results update our search results files part to weed out the indices that were found not relevant
         let qry_str = q_txt.join("\n");
         Self::send_event(
             res_send,
@@ -450,15 +439,28 @@ impl App {
             let context = relevant
                 .iter()
                 .filter_map(|(idx, _)| {
+                    let file = res_map.get(idx)?;
+                    let file_meta = match file {
+                        FileKind::Pdf((f, p)) => format!("File: {} Page: {p}", f.to_str()?),
+                        FileKind::Html(f) => format!("File: {}", f.to_str()?),
+                        FileKind::Text(f) => format!("File: {}", f.to_str()?),
+                    };
+                    // res_map.get(idx).map(|f| (*idx, f.clone()))
                     let a = store.with_k_adjacent(*idx, cfg.k_adjacent).ok()?;
                     let txt = [a.0.join("\n").as_str(), &a.1, a.2.join("\n").as_str()].join("\n\n");
 
                     let summary = llm.summarize(&qry_str, &txt).ok()?;
                     let txt = if !summary.heading().is_empty() && !summary.summary().is_empty() {
-                        format!("## {}\n\n\n{}", summary.heading(), summary.summary())
+                        format!(
+                            "## {}\nSource:\n{file_meta}\n\n\n{}",
+                            summary.heading(),
+                            summary.summary()
+                        )
                     } else {
                         txt
                     };
+
+                    final_result.files.push((*idx, file.clone()));
 
                     Some(txt)
                 })
