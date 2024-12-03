@@ -206,13 +206,29 @@ impl QueryMore {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct Evidence {
+    index: usize,
+    text: String,
+}
+
+impl Evidence {
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+}
+
+#[derive(Debug, Deserialize)]
 pub struct GeneratedAnswer {
-    evidence: Vec<String>,
+    evidence: Vec<Evidence>,
     answer: String,
 }
 
 impl GeneratedAnswer {
-    pub fn evidence(&self) -> &[String] {
+    pub fn evidence(&self) -> &[Evidence] {
         &self.evidence[..]
     }
 
@@ -225,14 +241,14 @@ impl Generator {
     /// Given a `query` string and a `context` returns a response
     pub fn answer(&mut self, topic: &str, query: &str, context: &str) -> Result<GeneratedAnswer> {
         let prompt = format!(
-"<|start_header_id|>system<|end_header_id|>\n\nYou are a context-based question answering AI. You retrieve information from provided context to answer user queries. Based on the provided context, generate a concise and relevant response to the given query by following the given requirments.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nText in the given context are extracted with approximate search of a text corpus. You want to find out information about \"{topic}\" only if present in the given context.\n\n\nContext:\n\n{context}\n\n\nQuery:\n\n{query}\n\n\nRequirements:\n- Answer must be supported by at least one datapoint in the context, extract the supporting text as evidence.\n- Use natural language summary for your answer and avoid copying from given context for your answer.\n- Truthfully return empty string (\"\") for answer if the given context doesn't contain the answer to the query.\n- Do not write an introduction or summary.\n- Your response must be a valid json of the following Schema.\n\n\nSchema:
+"<|start_header_id|>system<|end_header_id|>\n\nYou are a context-based question answering AI. You retrieve information from provided context to answer user queries. Based on the provided context, generate a informative, compete, relevant yet concise response to the given query by following the given requirments.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nText in the given context are extracted with approximate search of a text corpus. You want to find out information about \"{topic}\" only if present in the given context.\n\n\nContext:\n\n{context}\n\n\nQuery:\n\n{query}\n\n\nRequirements:\n- Answer must be supported by at least one datapoint in the context, extract the supporting text and source index as evidence.\n- Use natural language summary for your answer and avoid copying from given context for your answer.\n- Truthfully return empty string (\"\") for answer if the given context doesn't contain the answer to the query.\n- Do not write an introduction or summary.\n- Your response must be a valid json of the following Schema.\n\n\nSchema:
 
 {{
-    evidence: Array<string>,
+    evidence: Array<{{index: int, text: string}}>,
     answer: string
 }}
     
-Your answer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{{\n\t\"evidence\": ["
+Your answer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{{\n\t\"evidence\": [{{\"text\": \""
         );
 
         let mut tk = self.generate(&prompt)?;
@@ -240,10 +256,15 @@ Your answer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_hea
         if !tk.ends_with("}") {
             tk = format!("{tk}}}");
         }
-        // println!("{:#?}", tk);
-        let a = serde_json::from_str(format!("{{\n  \"evidence\": [{tk}").as_str()).unwrap(); //.map_err(|e| anyhow!(e))
 
-        Ok(a)
+        println!("{tk}");
+
+        serde_json::from_str(format!("{{\n  \"evidence\": [{{\"text\": \"{tk}").as_str()).map_err(
+            |e| {
+                println!("Answer.Error: {tk}");
+                anyhow!(e)
+            },
+        )
     }
 
     /// Given a set of queries and a set of documents, return a list of indices that are relevant to the queries

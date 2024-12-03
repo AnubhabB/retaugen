@@ -497,7 +497,7 @@ dependencies = [
 [[package]]
 name = "candle-core"
 version = "0.8.0"
-source = "git+https://github.com/huggingface/candle.git?branch=main#6f715f92564c10426c5565cd30ece25aee8d72ac"
+source = "git+https://github.com/huggingface/candle.git?branch=main#145aa7193c4e658b184f52706574cc9f115e4674"
 dependencies = [
  "byteorder",
  "candle-metal-kernels",
@@ -521,7 +521,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.8.0"
-source = "git+https://github.com/huggingface/candle.git?branch=main#6f715f92564c10426c5565cd30ece25aee8d72ac"
+source = "git+https://github.com/huggingface/candle.git?branch=main#145aa7193c4e658b184f52706574cc9f115e4674"
 dependencies = [
  "metal 0.27.0",
  "once_cell",
@@ -532,7 +532,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.8.0"
-source = "git+https://github.com/huggingface/candle.git?branch=main#6f715f92564c10426c5565cd30ece25aee8d72ac"
+source = "git+https://github.com/huggingface/candle.git?branch=main#145aa7193c4e658b184f52706574cc9f115e4674"
 dependencies = [
  "candle-core",
  "candle-metal-kernels",
@@ -548,7 +548,7 @@ dependencies = [
 [[package]]
 name = "candle-transformers"
 version = "0.8.0"
-source = "git+https://github.com/huggingface/candle.git?branch=main#6f715f92564c10426c5565cd30ece25aee8d72ac"
+source = "git+https://github.com/huggingface/candle.git?branch=main#145aa7193c4e658b184f52706574cc9f115e4674"
 dependencies = [
  "byteorder",
  "candle-core",
@@ -2626,7 +2626,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc2f4eb4bc735547cfed7c0a4922cbd04a4655978c09b54f1f7b228750664c34"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]
@@ -3092,7 +3092,7 @@ version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af1844ef2428cc3e1cb900be36181049ef3d3193c63e43026cfe202983b27a56"
 dependencies = [
- "proc-macro-crate 1.3.1",
+ "proc-macro-crate 3.2.0",
  "proc-macro2",
  "quote",
  "syn 2.0.90",
@@ -4209,7 +4209,7 @@ dependencies = [
  "image",
  "ort",
  "pdfium-render",
- "rand 0.7.3",
+ "rand 0.8.5",
  "rayon",
  "serde",
  "serde_json",
@@ -5117,9 +5117,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-dialog"
-version = "2.0.3"
+version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4307310e1d2c09ab110235834722e7c2b85099b683e1eb7342ab351b0be5ada3"
+checksum = "0962c2b9210e43cd849790d33bdf3d28c0e50d9884493fb340835244a708b5ba"
 dependencies = [
  "log",
  "raw-window-handle",
@@ -5129,15 +5129,15 @@ dependencies = [
  "tauri",
  "tauri-plugin",
  "tauri-plugin-fs",
- "thiserror 1.0.69",
+ "thiserror 2.0.3",
  "url",
 ]
 
 [[package]]
 name = "tauri-plugin-fs"
-version = "2.0.3"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96ba7d46e86db8c830d143ef90ab5a453328365b0cc834c24edea4267b16aba0"
+checksum = "0cdaf6701ee5efc83161cf41004aa5aec4d255c9fb2d2b11fe518fe506acc588"
 dependencies = [
  "anyhow",
  "dunce",
@@ -5149,7 +5149,9 @@ dependencies = [
  "serde_repr",
  "tauri",
  "tauri-plugin",
- "thiserror 1.0.69",
+ "tauri-utils",
+ "thiserror 2.0.3",
+ "toml 0.8.19",
  "url",
  "uuid",
 ]
@@ -5369,9 +5371,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.36"
+version = "0.3.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5dfd88e563464686c916c7e46e623e520ddc6d79fa6641390f2e3fa86e83e885"
+checksum = "35e7868883861bd0e56d9ac6efcaaca0d6d5d82a2a7ec8209ff492c07cf37b21"
 dependencies = [
  "deranged",
  "itoa 1.0.14",
@@ -5390,9 +5392,9 @@ checksum = "ef927ca75afb808a4d64dd374f00a2adf8d0fcff8e7b184af886c3c87ec4a3f3"
 
 [[package]]
 name = "time-macros"
-version = "0.2.18"
+version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f252a68540fde3a3877aeea552b832b40ab9a69e318efd078774a01ddee1ccf"
+checksum = "2834e6017e3e5e4b9834939793b282bc03b37a3336245fa820e35e233e2a85de"
 dependencies = [
  "num-conv",
  "time-core",
@@ -6185,7 +6187,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

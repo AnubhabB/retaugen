@@ -440,11 +440,19 @@ impl App {
                 .iter()
                 .filter_map(|(idx, _)| {
                     let file = res_map.get(idx)?;
-                    let file_meta = match file {
-                        FileKind::Pdf((f, p)) => format!("File: {} Page: {p}", f.to_str()?),
-                        FileKind::Html(f) => format!("File: {}", f.to_str()?),
-                        FileKind::Text(f) => format!("File: {}", f.to_str()?),
-                    };
+                    // let file_meta = match file {
+                    //     FileKind::Pdf((f, p)) => format!("Index: {} Page: {p}", f.to_str()?),
+                    //     FileKind::Html(f) => format!("File: {}", f.to_str()?),
+                    //     FileKind::Text(f) => format!("File: {}", f.to_str()?),
+                    // };
+                    let file_meta = format!(
+                        "Index: {idx}{}",
+                        if let &FileKind::Pdf((_, pg)) = file {
+                            format!(" Page: {pg}")
+                        } else {
+                            String::new()
+                        }
+                    );
                     // res_map.get(idx).map(|f| (*idx, f.clone()))
                     let a = store.with_k_adjacent(*idx, cfg.k_adjacent).ok()?;
                     let txt = [a.0.join("\n").as_str(), &a.1, a.2.join("\n").as_str()].join("\n\n");
@@ -469,6 +477,8 @@ impl App {
 
             (context, (Instant::now() - start).as_secs_f32())
         };
+
+        println!("{ctx}");
 
         Self::send_event(
             res_send,
@@ -518,8 +528,17 @@ impl App {
         .await?;
 
         final_result.answer = ans.answer().to_string();
-        final_result.evidence = ans.evidence().to_vec();
+        final_result.evidence = ans
+            .evidence()
+            .iter()
+            .map(|e| e.text().to_string())
+            .collect::<Vec<_>>();
 
+        final_result.files = ans
+            .evidence()
+            .iter()
+            .filter_map(|e| res_map.get(&e.index()).map(|f| (e.index(), f.clone())))
+            .collect::<Vec<_>>();
         println!("{:?}", final_result.files);
 
         Self::send_event(res_send, OpResult::Result(final_result)).await?;

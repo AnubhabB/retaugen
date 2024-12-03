@@ -6,7 +6,7 @@ use std::{fmt::Display, path::Path};
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 use image::imageops;
-use ort::{GraphOptimizationLevel, Session, SessionOutputs};
+use ort::session::{builder::GraphOptimizationLevel, Session, SessionOutputs};
 use rayon::slice::ParallelSliceMut;
 
 // An emum to represent the classes of regions of interest
@@ -114,7 +114,7 @@ impl Detectron2Model {
     // 2. Creates a tensor from the image
     // 3. Reshapes the tensor to channel first format
     // 4. Creates input ndarray for `ort` to consume
-    fn preprocess(&self, img: &image::DynamicImage) -> Result<(u32, u32, ort::Value)> {
+    fn preprocess(&self, img: &image::DynamicImage) -> Result<(u32, u32, ort::value::Value)> {
         // TODO: re-visit this and resize smarter
         let (img_width, img_height) = (img.width(), img.height());
         let img = img.resize_exact(
@@ -138,8 +138,10 @@ impl Detectron2Model {
         .concat();
 
         // Create a `ndarray` input for `ort` runtime to consume
-        let input =
-            ort::Value::from_array(([3, Self::REQUIRED_HEIGHT, Self::REQUIRED_WIDTH], &t[..]))?;
+        let input = ort::value::Value::from_array((
+            [3, Self::REQUIRED_HEIGHT, Self::REQUIRED_WIDTH],
+            &t[..],
+        ))?;
 
         Ok((img_width, img_height, input.into()))
     }
