@@ -19,13 +19,13 @@ mod utils;
 
 // Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
 #[tauri::command]
-async fn index(app: tauri::State<'_, App>, dir: &str) -> Result<(), String> {
+async fn index(window: Window, app: tauri::State<'_, App>, dir: &str) -> Result<(), String> {
     let selected = PathBuf::from_str(dir).map_err(|e| e.to_string())?;
     if !selected.is_dir() {
         return Err(format!("Selected `{dir}` is not a valid directory"));
     }
 
-    app.send(app::Event::Index(selected))
+    app.send(app::Event::Index((selected, window)))
         .await
         .map_err(|e| e.to_string())?;
 

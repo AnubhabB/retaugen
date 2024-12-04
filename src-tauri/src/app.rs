@@ -19,16 +19,12 @@ use tauri::{
 };
 
 use crate::{
-    docs::files_to_text,
-    embed::Embed,
-    gen::Generator,
-    store::{FileKind, Store},
-    utils::select_device,
+    docs::Extractor, embed::Embed, gen::Generator, store::{FileKind, Store}, utils::select_device
 };
 
 pub enum Event {
     Search((String, SearchConfig, Window)),
-    Index(PathBuf),
+    Index((PathBuf, Window)),
 }
 
 pub enum OpResult {
@@ -105,8 +101,8 @@ impl App {
                         // evt.0.send(OpResult::Error(e.to_string())).await.unwrap()
                     }
                 }
-                Event::Index(dir) => {
-                    if let Err(e) = app.index(dir.as_path()).await {
+                Event::Index((dir, w)) => {
+                    if let Err(e) = app.index(dir.as_path(), &w).await {
                         eprintln!("Error while indexing {dir:?}: {e:?}");
                         // evt.0.send(OpResult::Error(e.to_string())).await.unwrap()
                     }
@@ -116,7 +112,7 @@ impl App {
     }
 
     // Triggers indexing workflow
-    async fn index(&self, path: &Path) -> Result<()> {
+    async fn index(&self, path: &Path, w: &Window) -> Result<()> {
         {
             // Drop generator module to save some VRAM
             let has_gen = { self.gen.lock().await.is_some() };
@@ -131,50 +127,68 @@ impl App {
         let mut to_index = vec![];
         // Create list of files
         path.read_dir()?
-            .filter_map(|f| {
-                if let Ok(p) = f {
-                    if p.metadata().map_or(false, |f| f.is_file()) {
-                        Some(p)
-                    } else {
-                        None
-                    }
+        .filter_map(|f| {
+            if let Ok(p) = f {
+                if p.metadata().map_or(false, |f| f.is_file()) {
+                    Some(p)
                 } else {
                     None
                 }
-            })
-            .for_each(|f| {
-                let path = f.path();
-                if let Some(ext) = path.extension() {
-                    if ext == "txt" || ext == "pdf" {
-                        to_index.push(path);
-                    }
+            } else {
+                None
+            }
+        })
+        .for_each(|f| {
+            let path = f.path();
+            if let Some(ext) = path.extension() {
+                if ext == "txt" || ext == "pdf" {
+                    to_index.push(path);
                 }
-            });
+            }
+        });
 
         println!("Index {} files", to_index.len());
 
-        let f2t = files_to_text(self.modeldir.as_path(), &to_index[..])?.concat();
+        // For simplicity let's assume that processing each page is 50% of the total processing
+        {
+            // let (send, recv) = channel(32);
+            // let model_dir = self.modeldir.clone();
+            // let to_index = to_index;
 
-        println!(
-            "Text exteacion done.. {} text blocks. Begin split and encode ..",
-            f2t.len()
-        );
+            // tauri::async_runtime::spawn(async move {
+            //     let model_dir = model_dir;
+            //     let to_index = to_index;
 
-        let mut embed = self.embed.lock().await;
+            //     let extractor = Extractor::new(&model_dir, &to_index[..]).unwrap();
+            //     let n_pages = extractor.estimate();
 
-        let mut data = f2t.iter().flat_map(|(txt, f)| {
-            let t = embed
-                .split_text_and_encode(txt)
-                .iter()
-                .map(|(s, t)| (s.to_owned(), t.to_owned(), f.to_owned()))
-                .collect::<Vec<_>>();
-            t
-        });
+            //     if let Err(e) = extractor.extract(send).await {
 
-        let mut writer = self.store.write().await;
-        let (mut f, _) = writer.files()?;
+            //     }
+            // });
+        }
+        // let f2t = files_to_text(self.modeldir.as_path(), &to_index[..])?.concat();
 
-        writer.insert(&mut f, &mut data)?;
+        // println!(
+        //     "Text exteacion done.. {} text blocks. Begin split and encode ..",
+        //     f2t.len()
+        // );
+
+        // let mut embed = self.embed.lock().await;
+
+        // let mut data = f2t.iter().flat_map(|(txt, f)| {
+        //     let t = embed
+        //         .split_text_and_encode(txt)
+        //         .iter()
+        //         .map(|(s, t)| (s.to_owned(), t.to_owned(), f.to_owned()))
+        //         .collect::<Vec<_>>();
+        //     t
+        // });
+
+        // let mut writer = self.store.write().await;
+        // let (mut f, _) = writer.files()?;
+
+        // writer.insert(&mut f, &mut data)?;
 
         println!("Indexing done ..");
 
@@ -445,14 +459,7 @@ impl App {
                     //     FileKind::Html(f) => format!("File: {}", f.to_str()?),
                     //     FileKind::Text(f) => format!("File: {}", f.to_str()?),
                     // };
-                    let file_meta = format!(
-                        "Index: {idx}{}",
-                        if let &FileKind::Pdf((_, pg)) = file {
-                            format!(" Page: {pg}")
-                        } else {
-                            String::new()
-                        }
-                    );
+                    let file_meta = format!("Index: {idx}");
                     // res_map.get(idx).map(|f| (*idx, f.clone()))
                     let a = store.with_k_adjacent(*idx, cfg.k_adjacent).ok()?;
                     let txt = [a.0.join("\n").as_str(), &a.1, a.2.join("\n").as_str()].join("\n\n");
@@ -478,7 +485,7 @@ impl App {
             (context, (Instant::now() - start).as_secs_f32())
         };
 
-        println!("{ctx}");
+        println!("Full Context ---------------\n{ctx}");
 
         Self::send_event(
             res_send,
