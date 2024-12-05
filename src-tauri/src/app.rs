@@ -264,7 +264,7 @@ pub struct SearchConfig {
     ann_cutoff: Option<f32>,
     n_sub_qry: usize,
     k_adjacent: usize,
-    relevance_cutoff: f32
+    relevance_cutoff: f32,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -283,7 +283,7 @@ impl App {
             OpResult::Status(s) => window.emit("status", &s)?,
             OpResult::Result(s) => window.emit("result", &s)?,
             OpResult::Error(e) => window.emit("error", &e)?,
-            OpResult::Indexing(m) => window.emit("indexing", &m)?
+            OpResult::Indexing(m) => window.emit("indexing", &m)?,
         }
 
         Ok(())
@@ -544,15 +544,14 @@ impl App {
                 .collect::<Vec<_>>()
                 .join("\n\n");
 
-            (context.trim().to_string(), (Instant::now() - start).as_secs_f32())
+            (
+                context.trim().to_string(),
+                (Instant::now() - start).as_secs_f32(),
+            )
         };
 
         if ctx.is_empty() && !cfg.allow_without_evidence {
-            return Self::send_event(
-                res_send,
-                OpResult::Error("Nothing found!".to_string()),
-            )
-            .await;
+            return Self::send_event(res_send, OpResult::Error("Nothing found!".to_string())).await;
         }
 
         Self::send_event(
