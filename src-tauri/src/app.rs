@@ -19,7 +19,11 @@ use tauri::{
 };
 
 use crate::{
-    docs::Extractor, embed::Embed, gen::Generator, store::{FileKind, Store}, utils::select_device
+    docs::{Extractor, ExtractorEvt},
+    embed::Embed,
+    gen::Generator,
+    store::{FileKind, Store},
+    utils::select_device,
 };
 
 pub enum Event {
@@ -31,6 +35,7 @@ pub enum OpResult {
     Status(StatusData),
     Result(SearchResult),
     Error(String),
+    Indexing(IndexStatus),
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -39,6 +44,14 @@ pub struct StatusData {
     hint: Option<String>,
     body: String,
     time_s: Option<f32>,
+}
+
+#[derive(Clone, Default, Serialize)]
+pub struct IndexStatus {
+    msg: &'static str,
+    progress: f32,
+    pages: usize,
+    files: usize,
 }
 
 #[derive(Clone)]
@@ -127,46 +140,84 @@ impl App {
         let mut to_index = vec![];
         // Create list of files
         path.read_dir()?
-        .filter_map(|f| {
-            if let Ok(p) = f {
-                if p.metadata().map_or(false, |f| f.is_file()) {
-                    Some(p)
+            .filter_map(|f| {
+                if let Ok(p) = f {
+                    if p.metadata().map_or(false, |f| f.is_file()) {
+                        Some(p)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
-            } else {
-                None
-            }
-        })
-        .for_each(|f| {
-            let path = f.path();
-            if let Some(ext) = path.extension() {
-                if ext == "txt" || ext == "pdf" {
-                    to_index.push(path);
+            })
+            .for_each(|f| {
+                let path = f.path();
+                if let Some(ext) = path.extension() {
+                    if ext == "txt" || ext == "pdf" {
+                        to_index.push(path);
+                    }
                 }
-            }
-        });
+            });
 
-        println!("Index {} files", to_index.len());
+        let mut indexing = IndexStatus {
+            msg: "Indexing",
+            progress: 0.,
+            pages: 0,
+            files: to_index.len(),
+        };
 
+        Self::send_event(w, OpResult::Indexing(indexing.clone())).await?;
+
+        let mut f2t = vec![];
         // For simplicity let's assume that processing each page is 50% of the total processing
         {
-            // let (send, recv) = channel(32);
-            // let model_dir = self.modeldir.clone();
-            // let to_index = to_index;
+            indexing.msg = "Analyzing page layout and extracting pages!";
+            let (send, recv) = std::sync::mpsc::channel();
+            let model_dir = self.modeldir.clone();
+            let to_index = to_index;
 
-            // tauri::async_runtime::spawn(async move {
-            //     let model_dir = model_dir;
-            //     let to_index = to_index;
+            std::thread::spawn(move || {
+                let model_dir = model_dir;
+                let to_index = to_index;
 
-            //     let extractor = Extractor::new(&model_dir, &to_index[..]).unwrap();
-            //     let n_pages = extractor.estimate();
+                let extractor = Extractor::new(&model_dir, &to_index[..]).unwrap();
+                extractor.estimate(send.clone());
 
-            //     if let Err(e) = extractor.extract(send).await {
+                if let Err(e) = extractor.extract(send.clone()) {
+                    eprintln!("App.index: trying to call extract: {e:?}");
+                }
+            });
 
-            //     }
-            // });
+            let mut pagesparsed = 0.;
+
+            while let Ok(d) = recv.recv() {
+                match d {
+                    ExtractorEvt::Estimate(p) => {
+                        indexing.pages = p;
+                        Self::send_event(w, OpResult::Indexing(indexing.clone())).await?;
+                    }
+                    ExtractorEvt::Page => {
+                        pagesparsed += 1.;
+                        indexing.progress = pagesparsed / indexing.pages as f32 * 50.;
+                        Self::send_event(w, OpResult::Indexing(indexing.clone())).await?;
+                    }
+                    ExtractorEvt::Data(d) => match d {
+                        Ok(d) => {
+                            f2t = d.concat();
+                        }
+                        Err(e) => {
+                            eprintln!("App.index: error while parsing data: {e:?}");
+                        }
+                    },
+                }
+            }
         }
+
+        let chunks = f2t.len() as f32;
+        let mut chunks_done = 0.;
+
+        indexing.msg = "Chunking, encoding and embedding extracted data!";
         // let f2t = files_to_text(self.modeldir.as_path(), &to_index[..])?.concat();
 
         // println!(
@@ -174,21 +225,30 @@ impl App {
         //     f2t.len()
         // );
 
-        // let mut embed = self.embed.lock().await;
+        let mut embed = self.embed.lock().await;
 
-        // let mut data = f2t.iter().flat_map(|(txt, f)| {
-        //     let t = embed
-        //         .split_text_and_encode(txt)
-        //         .iter()
-        //         .map(|(s, t)| (s.to_owned(), t.to_owned(), f.to_owned()))
-        //         .collect::<Vec<_>>();
-        //     t
-        // });
+        let mut data = vec![];
+        for (txt, f) in f2t.iter() {
+            let t = embed
+                .split_text_and_encode(txt)
+                .iter()
+                .map(|(s, t)| (s.to_owned(), t.to_owned(), f.to_owned()))
+                .collect::<Vec<_>>();
 
-        // let mut writer = self.store.write().await;
-        // let (mut f, _) = writer.files()?;
+            data = [data, t].concat();
 
-        // writer.insert(&mut f, &mut data)?;
+            chunks_done += 1.;
+            indexing.progress = ((chunks_done / chunks) * 50.) + 50.;
+
+            Self::send_event(w, OpResult::Indexing(indexing.clone())).await?;
+        }
+
+        let mut data = data.drain(..);
+
+        let mut writer = self.store.write().await;
+        let (mut f, _) = writer.files()?;
+
+        writer.insert(&mut f, &mut data)?;
 
         println!("Indexing done ..");
 
@@ -219,9 +279,10 @@ impl App {
     async fn send_event(window: &Window, msg: OpResult) -> Result<()> {
         println!("Sending event to window!");
         match msg {
-            OpResult::Status(s) => window.emit("status", s).unwrap(),
-            OpResult::Result(s) => window.emit("result", &s).unwrap(),
-            OpResult::Error(e) => window.emit("error", e).unwrap(),
+            OpResult::Status(s) => window.emit("status", &s)?,
+            OpResult::Result(s) => window.emit("result", &s)?,
+            OpResult::Error(e) => window.emit("error", &e)?,
+            OpResult::Indexing(m) => window.emit("indexing", &m)?,
         }
 
         Ok(())

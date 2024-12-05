@@ -54,8 +54,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             // init our app
-            let state =
-                App::new(app.path().app_data_dir()?.as_path(), Path::new("../models")).unwrap();
+            let state = App::new(app.path().app_data_dir()?.as_path(), Path::new("../models"))?;
             app.manage(state);
 
             Ok(())

@@ -497,7 +497,7 @@ dependencies = [
 [[package]]
 name = "candle-core"
 version = "0.8.0"
-source = "git+https://github.com/huggingface/candle.git?branch=main#145aa7193c4e658b184f52706574cc9f115e4674"
+source = "git+https://github.com/huggingface/candle.git?branch=main#1807be84f4d9e388b19710a9282eb6501ce55f80"
 dependencies = [
  "byteorder",
  "candle-metal-kernels",
@@ -521,7 +521,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.8.0"
-source = "git+https://github.com/huggingface/candle.git?branch=main#145aa7193c4e658b184f52706574cc9f115e4674"
+source = "git+https://github.com/huggingface/candle.git?branch=main#1807be84f4d9e388b19710a9282eb6501ce55f80"
 dependencies = [
  "metal 0.27.0",
  "once_cell",
@@ -532,7 +532,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.8.0"
-source = "git+https://github.com/huggingface/candle.git?branch=main#145aa7193c4e658b184f52706574cc9f115e4674"
+source = "git+https://github.com/huggingface/candle.git?branch=main#1807be84f4d9e388b19710a9282eb6501ce55f80"
 dependencies = [
  "candle-core",
  "candle-metal-kernels",
@@ -548,7 +548,7 @@ dependencies = [
 [[package]]
 name = "candle-transformers"
 version = "0.8.0"
-source = "git+https://github.com/huggingface/candle.git?branch=main#145aa7193c4e658b184f52706574cc9f115e4674"
+source = "git+https://github.com/huggingface/candle.git?branch=main#1807be84f4d9e388b19710a9282eb6501ce55f80"
 dependencies = [
  "byteorder",
  "candle-core",
