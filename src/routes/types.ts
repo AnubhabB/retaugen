@@ -21,3 +21,10 @@ export interface SearchResult {
     answer: string,
     cfg: SearchConfig
 }
+
+export interface IndexStat {
+    msg: string,
+    progress: number,
+    pages: number,
+    files: number
+}

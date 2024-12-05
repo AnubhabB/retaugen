@@ -3,7 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { onMount } from 'svelte';
-  import type { SearchConfig, SearchResult, StatusData } from './types';
+  import type { IndexStat, SearchConfig, SearchResult, StatusData } from './types';
   import Search from './Search.svelte';
 
   let searchCfg: SearchConfig = {
@@ -17,6 +17,9 @@
 
   let search: string,
     searching: boolean = false;
+    
+  let indexing: boolean = false,
+    idxstatus: IndexStat;
 
   let logs: StatusData[] = [];
 
@@ -38,10 +41,13 @@
     if(!dir)
       return;
 
+    
     try {
-      invoke("index", { dir })
+      invoke("index", { dir });
+      indexing = true;
     } catch(e) {
       console.error("Error indexing: ", e);
+      indexing = false;
     }
   }
 
@@ -88,6 +94,10 @@
     window.listen("error", ({ event, payload}) => {
       console.log(event, payload);
       setSearchFalse();
+    });
+
+    window.listen("indexing", ({ payload }) => {
+      idxstatus = payload as IndexStat;
     });
   })
 
@@ -144,4 +154,20 @@ const setSearchFalse = () => {
       </div>
     {/if}
   </div>
+  {#if idxstatus}
+  <div class="w-full h-full fixed bg-gray-900 bg-opacity-70 backdrop:blur-sm flex flex-col items-center justify-center top-0 left-0">
+    <div class="w-1/2 flex flex-col bg-slate-700 p-8 rounded-xl shadow-xl">
+      <div class="text-md">Indexing..</div>
+      <div class="flex flex-row gap-2 items-center">
+          <span class="font-medium text-xs">Files: </span>
+          <span class="">{idxstatus.files}</span>
+          <span class="font-medium text-xs">Pages: </span>
+          <span class="">{idxstatus.pages}</span>
+      </div>
+      <div class="w-full h-6 bg-gray-800 rounded-md p-0.5 relative">
+        <div class="h-full rounded-md bg-green-700" style="width: {idxstatus.progress}%;"></div>
+      </div>
+    </div>
+  </div>
+  {/if}
 </div>
