@@ -6,6 +6,10 @@
         searching: boolean = false;
 
     console.log(search.files);
+
+    const openFile = (file: string, page: number|undefined) => {
+        console.log("Read file: ", file, page);
+    }
 </script>
 
 <div class="grid grid-cols-[24px_calc(100%-24px)]">
@@ -26,7 +30,7 @@
                 <div class="flex flex-col gap-2">
                     {#each search.evidence as e}
                         <span class="text-xs">
-                            • {e.text} <a class="text-sm">{e.file}[{e.page}]</a>
+                            • {e.text} <span role="link" tabindex="-1" class="text-sm" on:keyup|preventDefault on:click={() => { openFile(e.file, e.page) }}>Source</span>
                         </span>
                     {/each}
                 </div>
