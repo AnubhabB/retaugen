@@ -1,5 +1,6 @@
 export interface SearchConfig {
     with_bm25: boolean,
+    allow_without_evidence: boolean,
     max_result: number,
     ann_cutoff: number,
     n_sub_qry: number,

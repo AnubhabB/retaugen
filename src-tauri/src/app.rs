@@ -259,11 +259,12 @@ impl App {
 #[derive(Debug, Deserialize)]
 pub struct SearchConfig {
     with_bm25: bool,
+    allow_without_evidence: bool,
     max_result: usize,
     ann_cutoff: Option<f32>,
     n_sub_qry: usize,
     k_adjacent: usize,
-    relevance_cutoff: f32,
+    relevance_cutoff: f32
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -282,7 +283,7 @@ impl App {
             OpResult::Status(s) => window.emit("status", &s)?,
             OpResult::Result(s) => window.emit("result", &s)?,
             OpResult::Error(e) => window.emit("error", &e)?,
-            OpResult::Indexing(m) => window.emit("indexing", &m)?,
+            OpResult::Indexing(m) => window.emit("indexing", &m)?
         }
 
         Ok(())
@@ -520,7 +521,7 @@ impl App {
                     //     FileKind::Html(f) => format!("File: {}", f.to_str()?),
                     //     FileKind::Text(f) => format!("File: {}", f.to_str()?),
                     // };
-                    let file_meta = format!("Index: {idx}");
+
                     // res_map.get(idx).map(|f| (*idx, f.clone()))
                     let a = store.with_k_adjacent(*idx, cfg.k_adjacent).ok()?;
                     let txt = [a.0.join("\n").as_str(), &a.1, a.2.join("\n").as_str()].join("\n\n");
@@ -528,7 +529,7 @@ impl App {
                     let summary = llm.summarize(&qry_str, &txt).ok()?;
                     let txt = if !summary.heading().is_empty() && !summary.summary().is_empty() {
                         format!(
-                            "## {}\nSource:\n{file_meta}\n\n\n{}",
+                            "## {}\nSource index: {idx}\n\n\n{}",
                             summary.heading(),
                             summary.summary()
                         )
@@ -543,10 +544,16 @@ impl App {
                 .collect::<Vec<_>>()
                 .join("\n\n");
 
-            (context, (Instant::now() - start).as_secs_f32())
+            (context.trim().to_string(), (Instant::now() - start).as_secs_f32())
         };
 
-        println!("Full Context ---------------\n{ctx}");
+        if ctx.is_empty() && !cfg.allow_without_evidence {
+            return Self::send_event(
+                res_send,
+                OpResult::Error("Nothing found!".to_string()),
+            )
+            .await;
+        }
 
         Self::send_event(
             res_send,
@@ -596,18 +603,24 @@ impl App {
         .await?;
 
         final_result.answer = ans.answer().to_string();
-        final_result.evidence = ans
-            .evidence()
-            .iter()
-            .map(|e| e.text().to_string())
-            .collect::<Vec<_>>();
 
-        final_result.files = ans
-            .evidence()
-            .iter()
-            .filter_map(|e| res_map.get(&e.index()).map(|f| (e.index(), f.clone())))
-            .collect::<Vec<_>>();
-        println!("{:?}", final_result.files);
+        if ctx.is_empty() {
+            final_result.files = Vec::new();
+            final_result.evidence = Vec::new();
+        } else {
+            final_result.evidence = ans
+                .evidence()
+                .iter()
+                .map(|e| e.text().to_string())
+                .collect::<Vec<_>>();
+
+            final_result.files = ans
+                .evidence()
+                .iter()
+                .filter_map(|e| res_map.get(&e.index()).map(|f| (e.index(), f.clone())))
+                .collect::<Vec<_>>();
+            println!("{:?}", final_result.files);
+        }
 
         Self::send_event(res_send, OpResult::Result(final_result)).await?;
 

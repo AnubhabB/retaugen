@@ -8,18 +8,19 @@
 
   let searchCfg: SearchConfig = {
     with_bm25: true,
+    allow_without_evidence: false,
     max_result: 8,
     ann_cutoff: 0.75,
     n_sub_qry: 3,
     k_adjacent: 1,
-    relevance_cutoff: 5.,
+    relevance_cutoff: 5.
   };
 
   let search: string,
     searching: boolean = false;
     
   let indexing: boolean = false,
-    idxstatus: IndexStat;
+    idxstatus: IndexStat|undefined;
 
   let logs: StatusData[] = [];
 
@@ -93,11 +94,20 @@
 
     window.listen("error", ({ event, payload}) => {
       console.log(event, payload);
+      searches[0] = { qry: search, files: [], evidence: [], answer: "Not Found!", cfg: searchCfg };
+      searches = [...searches];
       setSearchFalse();
     });
 
     window.listen("indexing", ({ payload }) => {
       idxstatus = payload as IndexStat;
+      if(idxstatus.progress >= 100) {
+        let tout = setTimeout(() => {
+          clearTimeout(tout);
+          idxstatus = undefined;
+          indexing = false;
+        }, 3000);
+      }
     });
   })
 
@@ -122,6 +132,10 @@ const setSearchFalse = () => {
         <div class="flex flex-row gap-1 items-center">
           <span class="text-xs">BM25</span>
           <input type="checkbox" bind:checked={searchCfg.with_bm25}/>
+        </div>
+        <div class="flex flex-row gap-1 items-center">
+          <span class="text-xs">Allow without Evidence</span>
+          <input type="checkbox" bind:checked={searchCfg.allow_without_evidence}/>
         </div>
       </div>
     </div>
@@ -154,19 +168,20 @@ const setSearchFalse = () => {
       </div>
     {/if}
   </div>
-  {#if idxstatus}
+  {#if idxstatus && indexing}
   <div class="w-full h-full fixed bg-gray-900 bg-opacity-70 backdrop:blur-sm flex flex-col items-center justify-center top-0 left-0">
     <div class="w-1/2 flex flex-col bg-slate-700 p-8 rounded-xl shadow-xl">
       <div class="text-md">Indexing..</div>
       <div class="flex flex-row gap-2 items-center">
           <span class="font-medium text-xs">Files: </span>
-          <span class="">{idxstatus.files}</span>
+          <span class="text-sm">{idxstatus.files}</span>
           <span class="font-medium text-xs">Pages: </span>
-          <span class="">{idxstatus.pages}</span>
+          <span class="text-sm">{idxstatus.pages}</span>
       </div>
-      <div class="w-full h-6 bg-gray-800 rounded-md p-0.5 relative">
-        <div class="h-full rounded-md bg-green-700" style="width: {idxstatus.progress}%;"></div>
+      <div class="w-full h-6 bg-gray-800 rounded-md p-0.5 relative my-1">
+        <div class="h-full rounded-md bg-green-700 float-right text-xs" style="width: {idxstatus.progress}%;">{Math.round(idxstatus.progress * 100) / 100}%</div>
       </div>
+      <div class="text-xs">{idxstatus.msg}</div>
     </div>
   </div>
   {/if}
