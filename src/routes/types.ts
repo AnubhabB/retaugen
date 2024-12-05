@@ -17,10 +17,16 @@ export interface StatusData {
 
 export interface SearchResult {
     qry: string,
-    files: [number, any][],
-    evidence: string[],
+    files: string[],
+    evidence: Evidence[],
     answer: string,
     cfg: SearchConfig
+}
+
+export interface Evidence {
+    text: string,
+    file: string,
+    page?: number
 }
 
 export interface IndexStat {

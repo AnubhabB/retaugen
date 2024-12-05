@@ -1,6 +1,6 @@
 <script lang="ts">
     import Thumb from "./Thumb.svelte";
-import type { SearchResult } from "./types";
+    import type { SearchResult } from "./types";
 
     export let search: SearchResult,
         searching: boolean = false;
@@ -23,14 +23,16 @@ import type { SearchResult } from "./types";
         {#if search.evidence.length}
             <div class="flex flex-col py-2">
                 <div class="text-sm font-bold text-gray-400">Evidence</div>
-                <div class="flex flex-col">
+                <div class="flex flex-col gap-2">
                     {#each search.evidence as e}
-                        <span class="text-xs">• {e}</span>
+                        <span class="text-xs">
+                            • {e.text} <a class="text-sm">{e.file}[{e.page}]</a>
+                        </span>
                     {/each}
                 </div>
             </div>
         {/if}
-        {#if search.files.length}
+        <!-- {#if search.files.length}
         <div class="flex flex-col py-2">
             <div class="text-sm font-bold text-gray-400">Files</div>
             <div class="flex flex-row gap-2">
@@ -41,6 +43,6 @@ import type { SearchResult } from "./types";
                 {/each}
             </div>
         </div>
-        {/if}
+        {/if} -->
     </div>
 </div>

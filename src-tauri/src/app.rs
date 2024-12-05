@@ -270,9 +270,16 @@ pub struct SearchConfig {
 #[derive(Debug, Serialize, Default)]
 pub struct SearchResult {
     qry: String,
-    files: Vec<(usize, FileKind)>,
-    evidence: Vec<String>,
+    files: Vec<String>,
+    evidence: Vec<Evidence>,
     answer: String,
+}
+
+#[derive(Debug, Serialize, Default)]
+pub struct Evidence {
+    text: String,
+    file: String,
+    page: Option<usize>,
 }
 
 impl App {
@@ -425,7 +432,6 @@ impl App {
         let mut res_map = HashMap::new();
         res.iter().for_each(|r| {
             res_map.insert(r.0, r.1.file().clone());
-            final_result.files.push((r.0, r.1.file().clone()));
         });
 
         // Step 3: Check for relevance and re-rank
@@ -515,14 +521,6 @@ impl App {
             let context = relevant
                 .iter()
                 .filter_map(|(idx, _)| {
-                    let file = res_map.get(idx)?;
-                    // let file_meta = match file {
-                    //     FileKind::Pdf((f, p)) => format!("Index: {} Page: {p}", f.to_str()?),
-                    //     FileKind::Html(f) => format!("File: {}", f.to_str()?),
-                    //     FileKind::Text(f) => format!("File: {}", f.to_str()?),
-                    // };
-
-                    // res_map.get(idx).map(|f| (*idx, f.clone()))
                     let a = store.with_k_adjacent(*idx, cfg.k_adjacent).ok()?;
                     let txt = [a.0.join("\n").as_str(), &a.1, a.2.join("\n").as_str()].join("\n\n");
 
@@ -537,8 +535,6 @@ impl App {
                         txt
                     };
 
-                    final_result.files.push((*idx, file.clone()));
-
                     Some(txt)
                 })
                 .collect::<Vec<_>>()
@@ -549,6 +545,8 @@ impl App {
                 (Instant::now() - start).as_secs_f32(),
             )
         };
+
+        println!("Final Context: {}", ctx);
 
         if ctx.is_empty() && !cfg.allow_without_evidence {
             return Self::send_event(res_send, OpResult::Error("Nothing found!".to_string())).await;
@@ -607,16 +605,39 @@ impl App {
             final_result.files = Vec::new();
             final_result.evidence = Vec::new();
         } else {
+            let mut file_list = HashSet::new();
+            println!("Num Evidence: {}", ans.evidence().len());
             final_result.evidence = ans
                 .evidence()
                 .iter()
-                .map(|e| e.text().to_string())
-                .collect::<Vec<_>>();
+                .filter_map(|e| {
+                    let evidence = res_map.get(&e.index())?;
+                    let (file, page) = match evidence {
+                        FileKind::Pdf((pth, pg)) => {
+                            file_list.insert(pth.to_owned());
+                            (pth.to_str()?.to_string(), Some(*pg))
+                        }
+                        FileKind::Text(pth) => {
+                            file_list.insert(pth.to_owned());
+                            (pth.to_str()?.to_string(), None)
+                        }
+                        FileKind::Html(pth) => {
+                            file_list.insert(pth.to_owned());
+                            (pth.to_str()?.to_string(), None)
+                        }
+                    };
 
-            final_result.files = ans
-                .evidence()
+                    Some(Evidence {
+                        text: e.text().to_string(),
+                        file,
+                        page,
+                    })
+                })
+                .collect::<Vec<_>>();
+            println!("Num Evidence Later: {}", final_result.evidence.len());
+            final_result.files = file_list
                 .iter()
-                .filter_map(|e| res_map.get(&e.index()).map(|f| (e.index(), f.clone())))
+                .filter_map(|f| f.to_str().map(|s| s.to_string()))
                 .collect::<Vec<_>>();
             println!("{:?}", final_result.files);
         }
