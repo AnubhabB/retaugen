@@ -42,7 +42,7 @@ pub struct RegionOfInterest {
     kind: DetectedElem,
     // the bounding box - x1, y1, x2, y2 - top, left, bottom, right
     bbox: [f32; 4],
-    confidence: f32,
+    // confidence: f32,
 }
 
 impl RegionOfInterest {
@@ -54,9 +54,9 @@ impl RegionOfInterest {
         self.bbox
     }
 
-    pub fn confidence(&self) -> f32 {
-        self.confidence
-    }
+    // pub fn confidence(&self) -> f32 {
+    //     self.confidence
+    // }
 }
 
 /// A [`Detectron2`](https://github.com/facebookresearch/detectron2)-based model.
@@ -197,7 +197,7 @@ impl Detectron2Model {
                         x2 * width_factor,
                         y2 * height_factor,
                     ],
-                    confidence,
+                    // confidence,
                 })
             })
             .collect::<Vec<_>>();

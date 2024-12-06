@@ -1,14 +1,35 @@
 <script lang="ts">
     import Thumb from "./Thumb.svelte";
     import type { SearchResult } from "./types";
+    import { open, FileHandle, BaseDirectory, readFile, readTextFile } from '@tauri-apps/plugin-fs';
 
     export let search: SearchResult,
         searching: boolean = false;
 
-    console.log(search.files);
+    enum FileKind {
+        Pdf,
+        Txt,
+        Html
+    }
 
-    const openFile = (file: string, page: number|undefined) => {
-        console.log("Read file: ", file, page);
+    console.log(search.files);
+    let fileData: string|undefined,
+        kind: FileKind;
+
+    const openFile = async (path: string, page: number|undefined) => {
+        console.log("Read file: ", path, page);
+
+        if(path.endsWith(".pdf")) {
+            // console.log(buf.length);
+            const fread = await readFile(path);
+            const blob = new Blob([fread], { type: 'application/pdf' });
+            // Create a URL for the Blob
+            fileData  = `${URL.createObjectURL(blob)}#page=${page||1}`;
+            kind = FileKind.Pdf;
+        } else {
+            fileData = await readTextFile(path);
+            kind = path.endsWith(".txt") ? FileKind.Txt : FileKind.Html;
+        }
     }
 </script>
 
@@ -30,7 +51,7 @@
                 <div class="flex flex-col gap-2">
                     {#each search.evidence as e}
                         <span class="text-xs">
-                            • {e.text} <span role="link" tabindex="-1" class="text-sm" on:keyup|preventDefault on:click={() => { openFile(e.file, e.page) }}>Source</span>
+                            • {e.text} <span role="link" tabindex="-1" class="text-xs font-bold text-blue-400 cursor-pointer" on:keyup|preventDefault on:click={() => { openFile(e.file, e.page) }}>Source</span>
                         </span>
                     {/each}
                 </div>
@@ -50,3 +71,20 @@
         {/if} -->
     </div>
 </div>
+
+{#if fileData}
+<div class="w-full h-full fixed bg-gray-900 bg-opacity-70 backdrop:blur-sm flex flex-col items-center justify-center top-0 left-0">
+    <div class="w-11/12 h-[100vh] bg-white relative">
+        <button class="fixed right-2 top-2" on:click={async () => { fileData = undefined; }}>Close</button>
+        {#if kind == FileKind.Txt}
+        <div class="p-4">
+            {@html fileData?.replaceAll("\n", "<br>")}
+        </div>
+        {:else if kind == FileKind.Html}
+            {@html fileData}
+        {:else}
+            <embed src="{fileData}" style="width: 100%; height: 100vh"/>
+        {/if}
+    </div>
+</div>
+{/if}
