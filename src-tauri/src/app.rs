@@ -527,7 +527,7 @@ impl App {
                     let summary = llm.summarize(&qry_str, &txt).ok()?;
                     let txt = if !summary.heading().is_empty() && !summary.summary().is_empty() {
                         format!(
-                            "## {}\nSource index: {idx}\n\n\n{}",
+                            "Source: {idx}\n## {}\n{}",
                             summary.heading(),
                             summary.summary()
                         )
