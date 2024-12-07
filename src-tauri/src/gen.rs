@@ -348,7 +348,6 @@ mod tests {
     use std::path::Path;
 
     use anyhow::Result;
-    use candle_core::Tensor;
 
     use crate::utils::select_device;
 
@@ -408,25 +407,6 @@ mod tests {
         )?;
 
         println!("{ans:?}");
-        Ok(())
-    }
-
-    #[test]
-    fn argsort() -> Result<()> {
-        let d = Tensor::rand(
-            -256_f32,
-            255.,
-            (1, 2048),
-            &candle_core::Device::new_metal(0)?,
-        )?;
-        println!("{d}");
-        let i = d.arg_sort_last_dim(true)?;
-        println!("{i}");
-
-        // let d = Tensor::rand(-256_f32, 255., 12, &candle_core::Device::new_metal(0)?)?;
-        // println!("{d}");
-        // let idx = d.arg_sort_last_dim(false)?;
-        // println!("{}", idx.i(..64)?);
         Ok(())
     }
 }

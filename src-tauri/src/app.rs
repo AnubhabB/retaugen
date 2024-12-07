@@ -218,12 +218,6 @@ impl App {
         let mut chunks_done = 0.;
 
         indexing.msg = "Chunking, encoding and embedding extracted data!";
-        // let f2t = files_to_text(self.modeldir.as_path(), &to_index[..])?.concat();
-
-        // println!(
-        //     "Text exteacion done.. {} text blocks. Begin split and encode ..",
-        //     f2t.len()
-        // );
 
         let mut embed = self.embed.lock().await;
 

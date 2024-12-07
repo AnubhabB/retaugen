@@ -244,7 +244,7 @@ mod tests {
             .reshape((Embed::STELLA_MAX_BATCH * NUM_CHUNKS, 1024))?;
 
         let store = ANNIndex::build_index(
-            5,
+            16,
             16,
             &tensor,
             &(0..Embed::STELLA_MAX_BATCH * NUM_CHUNKS).collect::<Vec<_>>()[..],

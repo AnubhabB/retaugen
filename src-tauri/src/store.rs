@@ -156,6 +156,77 @@ impl Store {
         Ok(())
     }
 
+    // We break apart the index builders to separate functions and build the ANN and BM25 index in parallel
+    fn build_index(&mut self, num_trees: usize, max_size: usize) -> Result<()> {
+        let (ann, bm25) = rayon::join(
+            || {
+                Self::build_ann(
+                    &self.dir.join(EMBED_FILE),
+                    num_trees,
+                    max_size,
+                    self.data.len(),
+                )
+            },
+            || {
+                let docs = self
+                    .data
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, d)| {
+                        let chunk = match self.chunk(d) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                eprintln!("Error while reading chunk: {e:?}");
+                                return None;
+                            }
+                        };
+
+                        Some(Document {
+                            id: idx,
+                            contents: chunk,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
+                Self::build_bm25(docs)
+            },
+        );
+
+        self.index = Some(ann?);
+        self.bm25 = Some(bm25?);
+
+        Ok(())
+    }
+
+    // Builds the ANN index
+    fn build_ann(
+        file: &Path,
+        num_trees: usize,
+        max_size: usize,
+        data_len: usize,
+    ) -> Result<ANNIndex> {
+        let tensors = unsafe {
+            safetensors::MmapedSafetensors::new(file)?
+                .load(EMBED_TENSOR_NAME, &candle_core::Device::Cpu)?
+        };
+
+        let ann = ANNIndex::build_index(
+            num_trees,
+            max_size,
+            &tensors,
+            &(0..data_len).collect::<Vec<_>>(),
+        )?;
+
+        Ok(ann)
+    }
+
+    // Builds the BM25 index
+    fn build_bm25(docs: Vec<Document<usize>>) -> Result<SearchEngine<usize>> {
+        let engine = SearchEngineBuilder::<usize>::with_documents(Language::English, docs).build();
+
+        Ok(engine)
+    }
+
     /// API for search into the index
     pub fn search(
         &self,
@@ -403,77 +474,6 @@ impl Store {
 
         Ok((text, embed))
     }
-
-    // We break apart the index builders to separate functions and build the ANN and BM25 index in parallel
-    fn build_index(&mut self, num_trees: usize, max_size: usize) -> Result<()> {
-        let (ann, bm25) = rayon::join(
-            || {
-                Self::build_ann(
-                    &self.dir.join(EMBED_FILE),
-                    num_trees,
-                    max_size,
-                    self.data.len(),
-                )
-            },
-            || {
-                let docs = self
-                    .data
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(idx, d)| {
-                        let chunk = match self.chunk(d) {
-                            Ok(c) => c,
-                            Err(e) => {
-                                eprintln!("Error while reading chunk: {e:?}");
-                                return None;
-                            }
-                        };
-
-                        Some(Document {
-                            id: idx,
-                            contents: chunk,
-                        })
-                    })
-                    .collect::<Vec<_>>();
-
-                Self::build_bm25(docs)
-            },
-        );
-
-        self.index = Some(ann?);
-        self.bm25 = Some(bm25?);
-
-        Ok(())
-    }
-
-    // Builds the ANN index
-    fn build_ann(
-        file: &Path,
-        num_trees: usize,
-        max_size: usize,
-        data_len: usize,
-    ) -> Result<ANNIndex> {
-        let tensors = unsafe {
-            safetensors::MmapedSafetensors::new(file)?
-                .load(EMBED_TENSOR_NAME, &candle_core::Device::Cpu)?
-        };
-
-        let ann = ANNIndex::build_index(
-            num_trees,
-            max_size,
-            &tensors,
-            &(0..data_len).collect::<Vec<_>>(),
-        )?;
-
-        Ok(ann)
-    }
-
-    // Builds the BM25 index
-    fn build_bm25(docs: Vec<Document<usize>>) -> Result<SearchEngine<usize>> {
-        let engine = SearchEngineBuilder::<usize>::with_documents(Language::English, docs).build();
-
-        Ok(engine)
-    }
 }
 
 #[cfg(test)]
@@ -499,73 +499,69 @@ mod tests {
     }
 
     #[test]
-    fn storage_init() -> Result<()> {
+    fn storage_init_load_search() -> Result<()> {
         let data = {
-            let data = std::fs::read_to_string("../test-data/wiki-smoll.json")?;
+            let data = std::fs::read_to_string("../test-data/wiki-x-small.json")?;
             serde_json::from_str::<Vec<WikiNews>>(&data)?
         };
+        println!("Dataset loaded!");
 
-        let mut store = Store::load_from_file(Path::new("../test-data"), None, None)?;
+        let tdir = tempdir::TempDir::new("storetest")?;
+
         let mut embed = Embed::new(Path::new("../models"))?;
 
-        let mut chunks = data
-            .chunks(Embed::STELLA_MAX_BATCH)
-            .take(128)
-            .filter_map(|c| {
-                let batch = c
-                    .par_iter()
-                    .map(|t| format!("## {}\n{}", t.title, t.text))
-                    .collect::<Vec<_>>();
-
-                if let Ok(e) = embed.embeddings(&batch) {
-                    let data = batch
+        {
+            let mut store = Store::load_from_file(tdir.path(), None, None)?;
+            let mut chunks = data
+                .chunks(Embed::STELLA_MAX_BATCH)
+                .take(8)
+                .filter_map(|c| {
+                    let batch = c
                         .par_iter()
-                        .enumerate()
-                        .map(|(i, t)| {
-                            (
-                                t.to_string(),
-                                e.i(i).unwrap(),
-                                FileKind::Text(
-                                    Path::new("../test-data/wiki-smoll.json").to_path_buf(),
-                                ),
-                            )
-                        })
+                        .map(|t| format!("## {}\n{}", t.title, t.text))
                         .collect::<Vec<_>>();
 
-                    Some(data)
-                } else {
-                    None
-                }
-            })
-            .flatten();
+                    if let Ok(e) = embed.embeddings(&batch) {
+                        let data = batch
+                            .par_iter()
+                            .enumerate()
+                            .map(|(i, t)| {
+                                (
+                                    t.to_string(),
+                                    e.i(i).unwrap(),
+                                    FileKind::Text(
+                                        Path::new("../test-data/wiki-smoll.json").to_path_buf(),
+                                    ),
+                                )
+                            })
+                            .collect::<Vec<_>>();
 
-        let (mut text_file, _) = store.files()?;
-        store.insert(&mut text_file, &mut chunks)?;
+                        Some(data)
+                    } else {
+                        None
+                    }
+                })
+                .flatten();
 
-        // Ok, now let's test we have saved it right or not
-        for (i, d) in store.data.iter().enumerate() {
-            let mut df = store.data_file.as_ref().unwrap().lock().unwrap();
-            let mut buf = vec![0_u8; d.length];
-            df.seek(std::io::SeekFrom::Start(d.start as u64))?;
-            df.read_exact(&mut buf)?;
-            let str = std::str::from_utf8(&buf)?;
-            assert_eq!(str, format!("## {}\n{}", data[i].title, data[i].text));
+            let (mut text_file, _) = store.files()?;
+            store.insert(&mut text_file, &mut chunks)?;
+
+            // Ok, now let's test we have saved it right or not
+            for (i, d) in store.data.iter().enumerate() {
+                let mut df = store.data_file.as_ref().unwrap().lock().unwrap();
+                let mut buf = vec![0_u8; d.length];
+                df.seek(std::io::SeekFrom::Start(d.start as u64))?;
+                df.read_exact(&mut buf)?;
+                let str = std::str::from_utf8(&buf)?;
+                assert_eq!(str, format!("## {}\n{}", data[i].title, data[i].text));
+            }
         }
 
-        Ok(())
-    }
-
-    #[test]
-    fn storage_read() -> Result<()> {
-        let store = Store::load_from_file(Path::new("../test-data"), Some(16), Some(16))?;
-
-        let mut embed = Embed::new(Path::new("../models"))?;
+        // Now, lets load from the file
+        let qry_str = "Current events of significane in Europe".to_string();
+        let store = Store::load_from_file(tdir.path(), Some(16), Some(16))?;
         let qry = embed
-            .query(&[
-                "What are the latest news about Iraq?".to_string(),
-                "Latest news on ISIS in Iraq?".to_string(),
-                "Iraq news and current events".to_string(),
-            ])?
+            .query(&[qry_str.clone()])?
             .to_device(&candle_core::Device::Cpu)?;
 
         let b = qry.dims2()?.0;
@@ -574,13 +570,13 @@ mod tests {
             .collect::<Vec<_>>();
 
         qry.iter().for_each(|q| println!("{:?}", q.shape()));
-
-        let res = store.search(&qry[..], &["Iraq".to_string()], 8, Some(0.36), true)?;
+        let res = store.search(&qry[..], &[qry_str], 4, Some(0.36), false)?;
 
         println!("Response length: {}", res.len());
         res.iter().for_each(|(idx, _, txt, score)| {
             println!("Match[{idx}] score[{score}] ----------\n{txt}\n------------------\n")
         });
+
         Ok(())
     }
 }
