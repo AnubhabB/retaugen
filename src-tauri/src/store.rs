@@ -123,6 +123,7 @@ impl Store {
         let mut txt_data = Vec::with_capacity(4096);
         let mut tensors = Vec::with_capacity(64);
 
+        let t = std::time::Instant::now();
         while let Some((txt, tensor, file)) = data.by_ref().next() {
             let txt = txt.as_bytes();
             let data = Data {
@@ -137,14 +138,24 @@ impl Store {
             self.data.push(data);
             self.text_size += txt.len();
         }
-
-        Tensor::stack(&tensors, 0)?
-            .save_safetensors(EMBED_TENSOR_NAME, self.dir.join(EMBED_FILE))?;
+        println!("Before save time taken: {}", std::time::Instant::now().duration_since(t).as_secs_f32());
+        let t = std::time::Instant::now();
+        let tnsr = Tensor::stack(&tensors, 0)?;
+        println!("Stack took: {}", std::time::Instant::now().duration_since(t).as_secs_f32());
+        let t = std::time::Instant::now();
+        tnsr.save_safetensors(EMBED_TENSOR_NAME, self.dir.join(EMBED_FILE))?;
+        println!("Saftensors take: {}", std::time::Instant::now().duration_since(t).as_secs_f32());
+        let t = std::time::Instant::now();
         text_file.write_all(&txt_data)?;
+        println!("Writeall take: {}", std::time::Instant::now().duration_since(t).as_secs_f32());
+        let t = std::time::Instant::now();
         text_file.sync_all()?;
+        println!("Sync take: {}", std::time::Instant::now().duration_since(t).as_secs_f32());
 
+        let t = std::time::Instant::now();
         self.save()?;
-
+        println!("Time to sync: {}", std::time::Instant::now().duration_since(t).as_secs_f32());
+        
         Ok(())
     }
 
@@ -485,7 +496,6 @@ mod tests {
 
     use anyhow::Result;
     use candle_core::IndexOp;
-    use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
     use serde::Deserialize;
 
     use crate::embed::Embed;
@@ -505,25 +515,27 @@ mod tests {
             serde_json::from_str::<Vec<WikiNews>>(&data)?
         };
         println!("Dataset loaded!");
+        let n_trees = 4;
+        let max_size = 16;
 
         let tdir = tempdir::TempDir::new("storetest")?;
 
         let mut embed = Embed::new(Path::new("../models"))?;
 
         {
-            let mut store = Store::load_from_file(tdir.path(), None, None)?;
+            let mut store = Store::load_from_file(tdir.path(), Some(n_trees), Some(max_size))?;
             let mut chunks = data
                 .chunks(Embed::STELLA_MAX_BATCH)
                 .take(8)
                 .filter_map(|c| {
                     let batch = c
-                        .par_iter()
+                        .iter()
                         .map(|t| format!("## {}\n{}", t.title, t.text))
                         .collect::<Vec<_>>();
 
                     if let Ok(e) = embed.embeddings(&batch) {
                         let data = batch
-                            .par_iter()
+                            .iter()
                             .enumerate()
                             .map(|(i, t)| {
                                 (
@@ -542,7 +554,7 @@ mod tests {
                     }
                 })
                 .flatten();
-
+            
             let (mut text_file, _) = store.files()?;
             store.insert(&mut text_file, &mut chunks)?;
 
@@ -558,8 +570,8 @@ mod tests {
         }
 
         // Now, lets load from the file
-        let qry_str = "Current events of significane in Europe".to_string();
-        let store = Store::load_from_file(tdir.path(), Some(16), Some(16))?;
+        let qry_str = "What are some news about Iraq?".to_string();
+        let store = Store::load_from_file(tdir.path(), Some(n_trees), Some(max_size))?;
         let qry = embed
             .query(&[qry_str.clone()])?
             .to_device(&candle_core::Device::Cpu)?;
