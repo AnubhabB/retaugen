@@ -123,7 +123,6 @@ impl Store {
         let mut txt_data = Vec::with_capacity(4096);
         let mut tensors = Vec::with_capacity(64);
 
-        let t = std::time::Instant::now();
         while let Some((txt, tensor, file)) = data.by_ref().next() {
             let txt = txt.as_bytes();
             let data = Data {
@@ -138,23 +137,13 @@ impl Store {
             self.data.push(data);
             self.text_size += txt.len();
         }
-        println!("Before save time taken: {}", std::time::Instant::now().duration_since(t).as_secs_f32());
-        let t = std::time::Instant::now();
-        let tnsr = Tensor::stack(&tensors, 0)?;
-        println!("Stack took: {}", std::time::Instant::now().duration_since(t).as_secs_f32());
-        let t = std::time::Instant::now();
-        tnsr.save_safetensors(EMBED_TENSOR_NAME, self.dir.join(EMBED_FILE))?;
-        println!("Saftensors take: {}", std::time::Instant::now().duration_since(t).as_secs_f32());
-        let t = std::time::Instant::now();
-        text_file.write_all(&txt_data)?;
-        println!("Writeall take: {}", std::time::Instant::now().duration_since(t).as_secs_f32());
-        let t = std::time::Instant::now();
-        text_file.sync_all()?;
-        println!("Sync take: {}", std::time::Instant::now().duration_since(t).as_secs_f32());
 
-        let t = std::time::Instant::now();
+        let tnsr = Tensor::stack(&tensors, 0)?;
+        tnsr.save_safetensors(EMBED_TENSOR_NAME, self.dir.join(EMBED_FILE))?;
+        text_file.write_all(&txt_data)?;
+        text_file.sync_all()?;
+
         self.save()?;
-        println!("Time to sync: {}", std::time::Instant::now().duration_since(t).as_secs_f32());
         
         Ok(())
     }
@@ -515,15 +504,13 @@ mod tests {
             serde_json::from_str::<Vec<WikiNews>>(&data)?
         };
         println!("Dataset loaded!");
-        let n_trees = 4;
-        let max_size = 16;
 
         let tdir = tempdir::TempDir::new("storetest")?;
 
         let mut embed = Embed::new(Path::new("../models"))?;
 
         {
-            let mut store = Store::load_from_file(tdir.path(), Some(n_trees), Some(max_size))?;
+            let mut store = Store::load_from_file(tdir.path(), None, None)?;
             let mut chunks = data
                 .chunks(Embed::STELLA_MAX_BATCH)
                 .take(8)
@@ -571,7 +558,7 @@ mod tests {
 
         // Now, lets load from the file
         let qry_str = "What are some news about Iraq?".to_string();
-        let store = Store::load_from_file(tdir.path(), Some(n_trees), Some(max_size))?;
+        let store = Store::load_from_file(tdir.path(), None, None)?;
         let qry = embed
             .query(&[qry_str.clone()])?
             .to_device(&candle_core::Device::Cpu)?;
@@ -581,7 +568,6 @@ mod tests {
             .filter_map(|i| qry.get(i).ok().and_then(|t| t.unsqueeze(0).ok()))
             .collect::<Vec<_>>();
 
-        qry.iter().for_each(|q| println!("{:?}", q.shape()));
         let res = store.search(&qry[..], &[qry_str], 4, Some(0.36), false)?;
 
         println!("Response length: {}", res.len());

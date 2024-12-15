@@ -9,6 +9,12 @@ use image::imageops;
 use ort::session::{builder::GraphOptimizationLevel, Session, SessionOutputs};
 use rayon::slice::ParallelSliceMut;
 
+// Copied from: https://github.com/styrowolf/layoutparser-ort/blob/master/src/utils.rs
+/// Utility function to convert bbox to a array
+fn vec_to_bbox<T: Copy>(v: Vec<T>) -> [T; 4] {
+    [v[0], v[1], v[2], v[3]]
+}
+
 // An emum to represent the classes of regions of interest
 // detected by the `layout detection` model
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -53,22 +59,12 @@ impl RegionOfInterest {
     pub fn bbox(&self) -> [f32; 4] {
         self.bbox
     }
-
-    // pub fn confidence(&self) -> f32 {
-    //     self.confidence
-    // }
 }
 
 /// A [`Detectron2`](https://github.com/facebookresearch/detectron2)-based model.
 pub struct Detectron2Model {
     model: Session,
     label_map: [DetectedElem; 5],
-}
-
-// Copied from: https://github.com/styrowolf/layoutparser-ort/blob/master/src/utils.rs
-/// Utility function to convert bbox to a array
-fn vec_to_bbox<T: Copy>(v: Vec<T>) -> [T; 4] {
-    [v[0], v[1], v[2], v[3]]
 }
 
 impl Detectron2Model {
