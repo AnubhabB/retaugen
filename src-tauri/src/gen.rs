@@ -67,7 +67,6 @@ impl Generator {
             model,
             tokenizer,
             sampler,
-            // sampler2,
             stop_tokens,
         })
     }
