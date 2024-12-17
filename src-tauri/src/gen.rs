@@ -19,16 +19,15 @@ const TOP_K: usize = 32;
 pub struct Generator {
     cfg: Config,
     device: Device,
-    // model: ModelWeights,
     model: Llama,
     tokenizer: Tokenizer,
     sampler: LogitsProcessor,
-    // sampler2: Sampler,
     stop_tokens: [u32; 2],
 }
 
 impl Generator {
-    // const MODEL_FILE: &'static str = "Meta-Llama-3.1-8B-Instruct.Q8_0.gguf";
+    // Download model `safetensor` files into your project dir `models` folder
+    // I'm using LLaMA3.1 8B instruct, you can use whatever you want
     const MODEL_FILES: [&'static str; 2] = [
         "model-00001-of-00002.safetensors",
         "model-00002-of-00002.safetensors",
@@ -60,7 +59,7 @@ impl Generator {
                 temperature: TEMPERATURE,
             },
         );
-        // let sampler2 = Sampler::new(TEMPERATURE, TOP_P as f32, TOP_K, cfg.vocab_size, &device);
+
         println!("Llama ready!");
         Ok(Self {
             cfg,
@@ -72,12 +71,6 @@ impl Generator {
             stop_tokens,
         })
     }
-
-    // fn sample(&mut self, logits: &Tensor) -> Result<u32> {
-    //     println!("Logits: {:?}", logits.shape());
-    //     // let smpl = Sampler::new(TEMPERATURE, TOP_P as f32, TOP_K);
-    //     self.sampler2.sample(&logits.squeeze(0)?)
-    // }
 
     // A utility function to load the model and tokenizer
     fn load_model(model_dir: &Path, device: &Device) -> Result<(Llama, Config, Tokenizer)> {
@@ -102,8 +95,8 @@ impl Generator {
         Ok((llama, cfg, tokenizer))
     }
 
-    // Utility function to run the generation loop
-    fn generate(&mut self, prompt: &str) -> Result<String> {
+    /// Utility function to run the generation loop
+    pub fn generate(&mut self, prompt: &str) -> Result<String> {
         // Tokenize the input
         let input = self
             .tokenizer
@@ -115,7 +108,6 @@ impl Generator {
         }
 
         let mut cache = Cache::new(true, DType::BF16, &self.cfg, &self.device)?;
-
         // Creating a tensor of input tokens
         let mut ip = Tensor::new(input.get_ids(), &self.device)?.unsqueeze(0)?;
 
@@ -123,12 +115,9 @@ impl Generator {
 
         // The forward pass to the first token
         let mut logits = self.model.forward(&ip, 0, &mut cache)?;
-        // let s = self.sample(&logits)?;
-
         // Sampling the first token
         let mut next = self.sampler.sample(&logits.squeeze(0)?)?;
-        // let mut next = self.sample(&logits)?;
-        // println!("S2: [{s}] S1[{next}]");
+
         println!(
             "{} prompt tokens processed @ {}t/s",
             input.len(),
@@ -144,16 +133,7 @@ impl Generator {
             ip = Tensor::new(&[next], &self.device)?.unsqueeze(0)?;
 
             logits = self.model.forward(&ip, i, &mut cache)?;
-            // let s2 = match self.sample(&logits) {
-            //     Ok(d) => d,
-            //     Err(e) => {
-            //         println!("Apna sampling err: {e:?}");
-            //         0
-            //     }
-            // };
             next = self.sampler.sample(&logits.squeeze(0)?).unwrap();
-            // next = self.sample(&logits)?;
-            // println!("S2: [{s2}] S1[{next}]");
             if self.stop_tokens.contains(&next) {
                 break;
             }

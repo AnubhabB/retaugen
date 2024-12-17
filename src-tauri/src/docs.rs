@@ -79,7 +79,7 @@ impl PdfProc {
             .iter()
             .filter_map(|file| {
                 let pdf = self.pdfium.load_pdf_from_file(&file, None).ok()?;
-
+                println!("Comes here!");
                 self.process_pages(file, pdf, send.clone())
             })
             .collect::<Vec<_>>();
@@ -153,7 +153,11 @@ impl PdfProc {
                         })
                         .collect::<Vec<_>>()
                         .join("\n");
-                    send.send(ExtractorEvt::Page).ok()?;
+
+                    if let Err(e) = send.send(ExtractorEvt::Page) {
+                        eprintln!("Warn: error sending page event: {e:?}");
+                    }
+
                     Some((text, FileKind::Pdf((file.to_owned(), pg_num))))
                 })
                 .collect::<Vec<_>>(),
@@ -232,24 +236,29 @@ impl Extractor {
 
 #[cfg(test)]
 mod tests {
-    // use std::path::Path;
+    use std::path::Path;
 
-    // use anyhow::Result;
+    use anyhow::Result;
 
-    // use super::files_to_text;
+    use super::PdfProc;
 
-    // #[test]
-    // fn extract_from_pdf() -> Result<()> {
-    //     let files =
-    //         &[Path::new("../test-data/prehistory/origins-of-agriculture.pdf").to_path_buf()];
-    //     let results = files_to_text(Path::new("../models"), files)?;
+    #[test]
+    fn extract_from_pdf() -> Result<()> {
+        let files = vec![Path::new("../test-data/prehistory/archaeology.pdf").to_path_buf()];
+        let pdfproc = PdfProc::new(Path::new("../models"), files)?;
 
-    //     assert!(!results.is_empty());
+        let res = {
+            // Creating a dummy channel, we are not using this in this test
+            let (s, _) = std::sync::mpsc::channel();
+            pdfproc.extract(s)
+        }?;
 
-    //     // Let's print out the first page
-    //     for (txt, _) in results[0].iter() {
-    //         println!("{txt}");
-    //     }
-    //     Ok(())
-    // }
+        assert!(!res.is_empty());
+        // Let's print out the first page
+        for (txt, _) in res[0].iter() {
+            println!("{txt}");
+        }
+
+        Ok(())
+    }
 }

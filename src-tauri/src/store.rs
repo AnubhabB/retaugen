@@ -144,7 +144,7 @@ impl Store {
         text_file.sync_all()?;
 
         self.save()?;
-        
+
         Ok(())
     }
 
@@ -541,7 +541,7 @@ mod tests {
                     }
                 })
                 .flatten();
-            
+
             let (mut text_file, _) = store.files()?;
             store.insert(&mut text_file, &mut chunks)?;
 
