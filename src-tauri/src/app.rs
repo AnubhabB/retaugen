@@ -84,7 +84,6 @@ impl App {
             send,
             store,
             embed,
-            // appdir: appdir.to_path_buf(),
             modeldir: models_dir.to_path_buf(),
         };
 
@@ -96,14 +95,15 @@ impl App {
         Ok(app)
     }
 
-    // pub async fn send(&self, e: Event) -> Result<Receiver<OpResult>> {
+    /// A method to `send` events/ commands to the app state
     pub async fn send(&self, e: Event) -> Result<()> {
-        // let (s, r) = tauri::async_runchannel(32);
         self.send.send(e).await?;
-        // Ok(r)
+
         Ok(())
     }
 
+
+    // The internal listner - executes incoming tasks received
     async fn listen(app: Arc<Self>, recv: Receiver<Event>) {
         let mut recv = recv;
         while let Some(evt) = recv.recv().await {
@@ -111,13 +111,11 @@ impl App {
                 Event::Search((qry, cfg, w)) => {
                     if let Err(e) = app.search(&qry, &cfg, &w).await {
                         eprintln!("Error while searching: {e:?}");
-                        // evt.0.send(OpResult::Error(e.to_string())).await.unwrap()
                     }
                 }
                 Event::Index((dir, w)) => {
                     if let Err(e) = app.index(dir.as_path(), &w).await {
                         eprintln!("Error while indexing {dir:?}: {e:?}");
-                        // evt.0.send(OpResult::Error(e.to_string())).await.unwrap()
                     }
                 }
             }
