@@ -287,6 +287,7 @@ impl App {
 
         Ok(())
     }
+    
     // Trigger the search flow - the search pipeline
     async fn search(&self, qry: &str, cfg: &SearchConfig, res_send: &Window) -> Result<()> {
         let mut final_result = SearchResult {
