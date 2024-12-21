@@ -102,7 +102,6 @@ impl App {
         Ok(())
     }
 
-
     // The internal listner - executes incoming tasks received
     async fn listen(app: Arc<Self>, recv: Receiver<Event>) {
         let mut recv = recv;
@@ -287,7 +286,7 @@ impl App {
 
         Ok(())
     }
-    
+
     // Trigger the search flow - the search pipeline
     async fn search(&self, qry: &str, cfg: &SearchConfig, res_send: &Window) -> Result<()> {
         let mut final_result = SearchResult {
