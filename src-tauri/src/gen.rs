@@ -184,6 +184,57 @@ impl QueryMore {
     }
 }
 
+impl Generator {
+    /// Preprocesses a query to generate `topic` and supplimental queries for `Fusion Retrieval`
+    pub fn query_preproc(&mut self, query: &str, num_sub_qry: usize) -> Result<QueryMore> {
+        let prompt = format!(
+"<|start_header_id|>system<|end_header_id|>
+
+You are a smart and intelligent AI assistant generating sub-queries and a topic for a Fusion Retrieval system based on a given source query. You always adhere to the given requirements.<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+Given a source query that may require additional context or specific information, generate relevant sub-queries to retrieve more accurate results. Identify a word or a very short phrase that represents the topic of the query.
+
+
+Source Query:
+{query}
+
+
+Generate {num_sub_qry} relevant sub-queries that:
+- Are closely related to the source query
+- Can be used to retrieve additional context or specific information
+- Are concise and clear
+
+
+Requirements:
+- Sub-queries should not repeat the source query
+- Sub-queries should be relevant to the source query's intent, purpose and context
+- use natural language for sub queries
+- your answer should be a valid json of the following schema.
+
+
+Schema:
+
+{{
+  sub_queries: Array<string>,
+  topic: string
+}}
+
+
+Answer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+{{
+    \"sub_queries\": [\""
+        );
+
+        let tk = self.generate(&prompt)?;
+        let mut res =
+            serde_json::from_str::<QueryMore>(format!("{{\n  \"sub_queries\": [\"{tk}").as_str())?;
+        res.src = query.to_string();
+
+        Ok(res)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Evidence {
     #[serde(rename = "source")]
@@ -260,31 +311,39 @@ Your answer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_hea
             .join("\n");
 
         let prompt = format!(
-"<|start_header_id|>system<|end_header_id|>\n\nYou are a document relevance identification AI. You identify relevant documents based on a set of queries by strictly following the given requirments.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nDocuments:\n\n{}\n\n\n\nQueries:\n\n- {}\n\n\n\nTask: Identify the ids of documents that are relevant for generating answers to the given queries and rate them in a scale of 1-10 where a score of 10 is most relevant.\n\n\nRequirements:\n- Return an Array<Tuple> of relevant numeric ids along with their relevance score.\n- Only include ids of documents containing relevant information.\n- If no documents are relevant, return an empty array.\n- Format of response should be \"[[numeric index, numeric score]]\" which is Array<Tuple<index, score>>.\n- Do not write any introduction, summary or justifications.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n[",
+"<|start_header_id|>system<|end_header_id|>
+
+You are a document relevance identification AI. You identify relevant documents based on a set of queries by strictly following the given requirments.<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+Documents:
+
+{}
+
+
+
+Queries:
+
+- {}
+
+
+
+Task: Identify the ids of documents that are relevant for generating answers to the given queries and rate them in a scale of 1-10 where a score of 10 is most relevant.
+
+
+Requirements:
+- Return an Array<Tuple> of relevant numeric ids along with their relevance score.
+- Only include ids of documents containing relevant information.
+- If no documents are relevant, return an empty array.
+- Format of response should be \"[[numeric index, numeric score]]\" which is Array<Tuple<index, score>>.
+- Do not write any introduction, summary or justifications.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+[",
             docfmt,
             query.join("\n- ")
         );
 
         let tk = self.generate(&prompt)?;
         serde_json::from_str::<Vec<(usize, f32)>>(format!("[{tk}").as_str()).map_err(|e| anyhow!(e))
-    }
-
-    /// Preprocesses a query to generate `topic` and supplimental queries for `Fusion Retrieval`
-    pub fn query_preproc(&mut self, query: &str, num_sub_qry: usize) -> Result<QueryMore> {
-        let prompt = format!(
-"<|start_header_id|>system<|end_header_id|>\n\nYou are a smart and intelligent AI assistant generating sub-queries and a topic for a Fusion Retrieval system based on a given source query. You always adhere to the given requirements.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nGiven a source query that may require additional context or specific information, generate relevant sub-queries to retrieve more accurate results. Identify a word or a very short phrase that represents the topic of the query.\n\n\nSource Query:\n{query}\n\n\nGenerate {num_sub_qry} relevant sub-queries that:\n- Are closely related to the source query\n- Can be used to retrieve additional context or specific information\n- Are concise and clear\n\n\nRequirements:\n- Sub-queries should not repeat the source query\n- Sub-queries should be relevant to the source query's intent, purpose and context\n- use natural language for sub queries\n- your answer should be a valid json of the following schema.\n\n\nSchema:\n\n
-{{
-  sub_queries: Array<string>,
-  topic: string
-}}\n\n\nAnswer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{{\n  \"sub_queries\": [\""
-        );
-
-        let tk = self.generate(&prompt)?;
-        let mut res =
-            serde_json::from_str::<QueryMore>(format!("{{\n  \"sub_queries\": [\"{tk}").as_str())?;
-        res.src = query.to_string();
-
-        Ok(res)
     }
 }
 
