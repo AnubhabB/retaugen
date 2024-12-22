@@ -8,7 +8,7 @@ use candle_transformers::{
     models::llama::{Cache, Config, Llama, LlamaConfig},
 };
 use serde::Deserialize;
-use tokenizers::Tokenizer;
+use tokenizers::{Encoding, Tokenizer};
 
 // Sampling constants
 const TEMPERATURE: f64 = 0.8;
@@ -97,11 +97,7 @@ impl Generator {
     /// Utility function to run the generation loop
     pub fn generate(&mut self, prompt: &str) -> Result<String> {
         // Tokenize the input
-        let input = self
-            .tokenizer
-            .encode(prompt, true)
-            .map_err(|e| anyhow!(e))?;
-
+        let input = self.tokenize(prompt)?;
         if input.len() >= self.cfg.max_position_embeddings {
             return Err(anyhow!("large input tokens!"));
         }
@@ -154,6 +150,11 @@ impl Generator {
             }
         })
     }
+
+    /// Small helper to tokenize a given text
+    pub fn tokenize(&self, txt: &str) -> Result<Encoding> {
+        self.tokenizer.encode(txt, true).map_err(|e| anyhow!(e))
+    }
 }
 
 /// A struct to hold `sub queries` and a `topic`
@@ -167,6 +168,13 @@ pub struct QueryMore {
 }
 
 impl QueryMore {
+    pub fn new(src: &str) -> Self {
+        Self {
+            src: src.to_string(),
+            more: vec![],
+            topic: String::new(),
+        }
+    }
     pub fn source(&self) -> &str {
         &self.src
     }
@@ -272,14 +280,42 @@ impl Generator {
     /// Given a `query` string and a `context` returns a response
     pub fn answer(&mut self, topic: &str, query: &str, context: &str) -> Result<GeneratedAnswer> {
         let prompt = format!(
-"<|start_header_id|>system<|end_header_id|>\n\nYou are a context-based question answering AI. You retrieve information from provided context to answer user queries. Based on the provided context, generate a informative, compete, relevant yet concise response to the given query by following the given requirments.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nText in the given context are extracted with approximate search of a text corpus. You want to find out information about \"{topic}\" only if present in the given context.\n\n\nContext:\n\n{context}\n\n\nQuery:\n\n{query}\n\n\nRequirements:\n- Answer must be supported by at least one datapoint in the given context, extract the supporting text along with the associated source id as evidence.\n- Use natural language summary for your answer and avoid copying from given context for your answer.\n- Truthfully return empty string (\"\") for answer if the given context doesn't contain the answer to the query.\n- Do not write an introduction or summary.\n- Your response must be a valid json of the following Schema.\n\n\nSchema:
+"<|start_header_id|>system<|end_header_id|>
+
+You are a context-based question answering AI. You retrieve information from provided context to answer user queries. Based on the provided context, generate a informative, compete, relevant yet concise response to the given query by following the given requirments.<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+Text in the given context are extracted with approximate search of a text corpus. You want to find out information about \"{topic}\" only if present in the given context.
+
+
+Context:
+
+{context}
+
+
+Query:
+
+{query}
+
+
+Requirements:
+- Answer must be supported by at least one datapoint in the given context, extract the supporting text along with the associated source id as evidence.
+- Use natural language summary for your answer and avoid copying from given context for your answer.
+- Truthfully return empty string (\"\") for answer if the given context doesn't contain the answer to the query.
+- Do not write an introduction or summary.
+- Your response must be a valid json of the following Schema.
+
+
+Schema:
 
 {{
     evidence: Array<{{source: int, text: string}}>,
     answer: string
 }}
     
-Your answer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{{\n\t\"evidence\": [{{\"source\": "
+Your answer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+{{
+    \"evidence\": [{{\"source\": "
         );
 
         let mut tk = self.generate(&prompt)?;
@@ -290,7 +326,7 @@ Your answer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_hea
 
         // println!("Op:\n{{\n  \"evidence\": [{{\"source\": {tk}");
 
-        serde_json::from_str(format!("{{\n  \"evidence\": [{{\"source\": {tk}").as_str()).map_err(
+        serde_json::from_str(format!("{{\n\t\"evidence\": [{{\"source\": {tk}").as_str()).map_err(
             |e| {
                 println!("Answer.Error:\n{tk}");
                 anyhow!(e)
@@ -367,11 +403,49 @@ impl Generator {
     /// Generates summaries of given text
     pub fn summarize(&mut self, queries: &str, context: &str) -> Result<Summary> {
         let prompt = format!(
-"<|start_header_id|>system<|end_header_id|>\n\nYou are a smart and intelligent AI assistant generating a heading and summary of a given data so that it can be used for answering the user queries.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nQueries:\n\n{queries}\n\n\nData:\n\n{context}\n\n\n\nGenerate a short summary and a heading for the given data that:\n- Reflects the essence, tone and information of the data\n- Retains all key facts\n- Are concise and clear\n- Can be used as evidence to answer given queries\n\n\nRequirements:\n- Heading should reflect the topic and essence of the data\n- Summary and heading should be relevant to the source data's intent, purpose and context\n- use natural language for summary\n- All key facts should be retained\n- Summary should not be more than 350 words\n\n\nSchema:\n\n
+"<|start_header_id|>system<|end_header_id|>
+
+You are a smart and intelligent AI assistant generating a heading and summary of a given data so that it can be used for answering the user queries.<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+Queries:
+
+{queries}
+
+
+Data:
+
+{context}
+
+
+
+Generate a short summary and a heading for the given data that:
+- Reflects the essence, tone and information of the data
+- Retains all key facts
+- Are concise and clear
+- Can be used as evidence to answer given queries
+
+
+Requirements:
+- Heading should reflect the topic and essence of the data
+- Summary and heading should be relevant to the source data's intent, purpose and context
+- use natural language for summary
+- All key facts should be retained
+- Summary should not be more than 350 words
+
+
+Schema:
+
+
 {{
     heading: string,
     summary: string
-}}\n\n\nAnswer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{{\n  \"heading\": \""
+}}
+
+
+Answer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+{{
+    \"heading\": \""
         );
 
         let tk = self.generate(&prompt)?;
@@ -445,6 +519,52 @@ mod tests {
         )?;
 
         println!("{ans:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn temp_count_tokens() -> Result<()> {
+        let prompt = "<|start_header_id|>system<|end_header_id|>
+
+You are a context-based question answering AI. You retrieve information from provided context to answer user queries. Based on the provided context, generate a informative, compete, relevant yet concise response to the given query by following the given requirments.<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+Text in the given context are extracted with approximate search of a text corpus. You want to find out information about \"\" only if present in the given context.
+
+
+Context:
+
+
+
+
+Query:
+
+
+
+
+Requirements:
+- Answer must be supported by at least one datapoint in the given context, extract the supporting text along with the associated source id as evidence.
+- Use natural language summary for your answer and avoid copying from given context for your answer.
+- Truthfully return empty string (\"\") for answer if the given context doesn't contain the answer to the query.
+- Do not write an introduction or summary.
+- Your response must be a valid json of the following Schema.
+
+
+Schema:
+
+{{
+    evidence: Array<{{source: int, text: string}}>,
+    answer: string
+}}
+    
+Your answer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+{{
+    \"evidence\": [{{\"source\": ";
+
+        let tokenizer = super::Tokenizer::from_file("../models/llama_tokenizer.json").unwrap();
+        let tkz = tokenizer.encode(prompt, true).unwrap();
+
+        println!("{}", tkz.len());
         Ok(())
     }
 }

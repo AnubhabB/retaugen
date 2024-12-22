@@ -65,6 +65,8 @@ pub enum FileKind {
     Text(PathBuf),
 }
 
+pub type StoreDataRepr<'a> = (usize, &'a Data, String, f32);
+
 impl Store {
     /// Loads data and initializes indexes if files are present in the given directory or creates them
     pub fn load_from_file(
@@ -235,7 +237,7 @@ impl Store {
         top_k: usize,
         ann_cutoff: Option<f32>,
         with_bm25: bool,
-    ) -> Result<Vec<(usize, &Data, String, f32)>> {
+    ) -> Result<Vec<StoreDataRepr>> {
         // Giving 75% weightage to the ANN search and 25% to BM25 search
         const ALPHA: f32 = 0.75;
 
