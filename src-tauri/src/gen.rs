@@ -15,7 +15,7 @@ const TEMPERATURE: f64 = 0.8;
 const TOP_P: f64 = 0.95;
 const TOP_K: usize = 32;
 
-/// A struct to maintain a initialized Llama quantized `gguf` model and associated methods
+/// A struct to maintain a initialized Llama model and associated methods
 pub struct Generator {
     cfg: Config,
     device: Device,
