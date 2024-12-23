@@ -436,20 +436,19 @@ impl App {
                 llm.find_relevant(qry, &batched).ok()
             })
             .flatten()
-            .filter(|j| {
-                if unq.contains(&j.0) || j.1 < cutoff {
+            .filter(|(idx, score)| {
+                if unq.contains(idx) || *score < cutoff {
                     false
                 } else {
-                    unq.insert(j.0);
+                    unq.insert(*idx);
                     true
                 }
             })
             .collect::<Vec<_>>();
 
-        relevant.par_sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .map_or(std::cmp::Ordering::Equal, |o| o)
-        });
+        relevant.par_sort_by(|a, b| b.1.total_cmp(&a.1));
+
+        println!("Relevant: {relevant:?}");
 
         Self::send_event(
             window,
@@ -520,7 +519,7 @@ impl App {
     // Now, our default prompt without any aditional data takes *~250* tokens, which means we are left with around *2800* tokens for our context.
     // So, we'll define our `threshold` as follows:
     // ```
-    // while total context > 2800:
+    // while total context > 2500:
     //  Summarize largest chunk
     //```
     async fn create_context(
@@ -569,7 +568,8 @@ impl App {
                     window,
                     OpResult::Status(StatusData {
                         head: "Context generation: Summarizing a datapoint".to_string(),
-                        body: "Generating summary of a text chunk to fit it in context!".to_string(),
+                        body: "Generating summary of a text chunk to fit it in context!"
+                            .to_string(),
                         ..Default::default()
                     }),
                 )
@@ -730,7 +730,7 @@ impl App {
         // Keep initial findings, if the search errors out
         let mut res_map = HashMap::new();
         res.iter().for_each(|r| {
-            res_map.insert(r.0, r.1.file().clone());
+            res_map.insert(r.0, r.to_owned());
         });
 
         // Step 3: Check for relevance and re-rank
@@ -743,7 +743,10 @@ impl App {
                     res
                 } else {
                     r.iter()
-                        .filter_map(|idx| res.get(*idx).cloned())
+                        .filter_map(|idx| {
+                            let dp = res_map.get(idx)?;
+                            Some(dp.to_owned())
+                        })
                         .collect::<Vec<_>>()
                 }
             }
@@ -801,8 +804,6 @@ impl App {
             }
         };
 
-        println!("Final Context: {}", ctx);
-
         if ctx.is_empty() && !cfg.allow_without_evidence {
             return Self::send_event(res_send, OpResult::Error("Nothing found!".to_string())).await;
         }
@@ -855,7 +856,7 @@ impl App {
                 .evidence()
                 .iter()
                 .filter_map(|e| {
-                    let evidence = res_map.get(&e.index())?;
+                    let evidence = res_map.get(&e.index())?.1.file();
                     let (file, page) = match evidence {
                         FileKind::Pdf((pth, pg)) => {
                             file_list.insert(pth.to_owned());

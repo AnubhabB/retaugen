@@ -38,7 +38,7 @@
     <span class="flex flex-row">
         <div class="font-medium text-gray-400">{search.qry}</div>
         {#if search.elapsed}
-        <div class="font-medium text-green-400 text-xs">{search.elapsed}s</div>
+        <div class="font-medium text-green-400 text-xs ml-auto">[{Math.round(search.elapsed * 100) / 100}s]</div>
         {/if}
     </span>
     <div>A.</div>

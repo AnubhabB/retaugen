@@ -85,6 +85,7 @@ impl Generator {
         let start = Instant::now();
         let cfg =
             serde_json::from_slice::<LlamaConfig>(&std::fs::read(&cfg_file)?)?.into_config(false);
+
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&model_files, DType::BF16, device)? };
         let llama = Llama::load(vb, &cfg)?;
         println!("LLaMA loaded in {}s", (Instant::now() - start).as_secs());
@@ -116,15 +117,14 @@ impl Generator {
         println!(
             "{} prompt tokens processed @ {}t/s",
             input.len(),
-            input.len() as f32 / (std::time::Instant::now() - start).as_secs() as f32
+            input.len() as f32 / (std::time::Instant::now() - start).as_secs_f32()
         );
         // A container for all tokens generated
         let mut all_tokens = vec![next];
 
         start = std::time::Instant::now();
-
         // Forward pass - decoder loop
-        for i in input.len()..(self.cfg.max_position_embeddings - input.len()) {
+        for i in input.len()..self.cfg.max_position_embeddings {
             ip = Tensor::new(&[next], &self.device)?.unsqueeze(0)?;
 
             logits = self.model.forward(&ip, i, &mut cache)?;
@@ -145,7 +145,7 @@ impl Generator {
         Ok(match self.tokenizer.decode(&all_tokens[..], false) {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("Error generating tokens: {e:?}");
+                println!("Error generating tokens: {e:?}");
                 anyhow::bail!("Error generating tokens")
             }
         })
@@ -283,9 +283,9 @@ impl Generator {
         let prompt = format!(
 "<|start_header_id|>system<|end_header_id|>
 
-You are a context-based question answering AI. You understand, retrieve and analyze information from provided context to answer user's query. Based on the provided context, generate a informative, complete, relevant yet concise response to the user query. You must follow the given requirements while writing your answer.<|eot_id|><|start_header_id|>user<|end_header_id|>
+You are a smart, intelligent, attentive and diligient AI. You are analysing, understanding and retrieving information from given context to answer user's query. Based on the provided context generate a informative, complete, relevant yet concise response to the query. You must follow the given requirements while writing your answer.<|eot_id|><|start_header_id|>user<|end_header_id|>
 
-Text in the context below are extracted with approximate search of a text corpus and contains the source id associated with each datapoint. You have to find out information about \"{topic}\" and respond to the user's query only if it can be derived from the given context.
+The given Context contains information extracted from a corpus based on an approximate search. You have to find out information about \"{topic}\" and respond to the user's query only if it can be derived from the given context.
 
 Context:
 ```
@@ -304,19 +304,17 @@ Requirements:
 - Do not write an introduction or summary.
 - Your response must be a valid json of the following Schema.
 
-
 Schema:
-
 {{
     evidence: Array<{{source_id: int, excerpt: string}}>,
     answer: string
-}}
-    
-Your answer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+}}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
 {{
-    \"evidence\": [{{\"excerpt\": \""
+    \"evidence\": ["
         );
+
+        // println!("Answer prompt:\n{prompt}");
 
         let mut tk = self.generate(&prompt)?;
 
@@ -324,16 +322,34 @@ Your answer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_hea
             tk = format!("{tk}}}");
         }
 
-        // println!("Op:\n{{\n  \"evidence\": [{{\"source\": {tk}");
-
-        serde_json::from_str(format!("{{\n\t\"evidence\": [{{\"excerpt\": \"{tk}").as_str()).map_err(
-            |e| {
-                println!("Answer.Error:\n{tk}");
-                anyhow!(e)
-            },
-        )
+        serde_json::from_str(format!("{{\n\t\"evidence\": [{tk}").as_str()).map_err(|e| {
+            println!("Answer.Error:\n{tk}");
+            anyhow!(e)
+        })
     }
+}
 
+#[derive(Debug, Deserialize)]
+pub struct Relevant {
+    relevant: Vec<DocRelevance>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DocRelevance {
+    id: usize,
+    score: f32,
+}
+
+impl Relevant {
+    fn to_list(&self) -> Vec<(usize, f32)> {
+        self.relevant
+            .iter()
+            .map(|r| (r.id, r.score))
+            .collect::<Vec<_>>()
+    }
+}
+
+impl Generator {
     /// Given a set of queries and a set of documents, return a list of indices that are relevant to the queries
     pub fn find_relevant(
         &mut self,
@@ -349,37 +365,48 @@ Your answer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_hea
         let prompt = format!(
 "<|start_header_id|>system<|end_header_id|>
 
-You are a document relevance identification AI. You identify relevant documents based on a set of queries by strictly following the given requirments.<|eot_id|><|start_header_id|>user<|end_header_id|>
+You are an intelligent and dilligient AI who analyses text documents to figure out if a particular document contains relevant information for answering a set of queries. You must follow the given requirements while analysing and scoring the documents for your answer.<|eot_id|><|start_header_id|>user<|end_header_id|>
 
 Documents:
-
+```
 {}
-
-
+```
 
 Queries:
-
+```
 - {}
+```
 
-
-
-Task: Identify the ids of documents that are relevant for generating answers to the given queries and rate them in a scale of 1-10 where a score of 10 is most relevant.
-
+Task:
+Identify the ids of documents that are relevant for generating answers to the given queries and rate them in a scale of 1-10 where a score of 10 is most relevant.
 
 Requirements:
-- Return an Array<Tuple> of relevant numeric ids along with their relevance score.
 - Only include ids of documents containing relevant information.
-- If no documents are relevant, return an empty array.
-- Format of response should be \"[[numeric index, numeric score]]\" which is Array<Tuple<index, score>>.
-- Do not write any introduction, summary or justifications.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+- If no documents are relevant the field \"relevant\" must be an empty array.
+- Do not write any note, introduction, summary or justifications.
+- Your answer must be a valid JSON of the following Schema.
 
-[",
+Schema:
+{{
+    \"relevant\": Array<{{\"id\": numeric id, \"score\": numeric score}}>
+}}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+{{
+    \"relevant\": [",
             docfmt,
             query.join("\n- ")
         );
 
+        // println!("Relevance prompt:\n{prompt}");
         let tk = self.generate(&prompt)?;
-        serde_json::from_str::<Vec<(usize, f32)>>(format!("[{tk}").as_str()).map_err(|e| anyhow!(e))
+
+        match serde_json::from_str::<Relevant>(format!("{{\n\t\"relevant\": [{tk}").as_str()) {
+            Ok(d) => Ok(d.to_list()),
+            Err(e) => {
+                println!("Generator::find_relevant: error while deserializing: {e:?}\n{tk:?}\n");
+                Err(anyhow!(e))
+            }
+        }
     }
 }
 
@@ -408,14 +435,14 @@ impl Generator {
 You are a smart and intelligent AI assistant generating a heading and summary of a given data so that it can be used for answering the user queries.<|eot_id|><|start_header_id|>user<|end_header_id|>
 
 Queries:
-
+```
 {queries}
-
+```
 
 Data:
-
+```
 {context}
-
+```
 
 
 Generate a short summary and a heading for the given data that:
@@ -434,8 +461,6 @@ Requirements:
 
 
 Schema:
-
-
 {{
     heading: string,
     summary: string
