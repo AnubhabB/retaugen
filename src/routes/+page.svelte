@@ -137,6 +137,35 @@ const setSearchFalse = () => {
           <span class="text-xs">Allow without Evidence</span>
           <input type="checkbox" bind:checked={searchCfg.allow_without_evidence}/>
         </div>
+        <div class="flex flex-row gap-1 items-center">
+          <span class="text-xs">Subqueries</span>
+          <select bind:value={searchCfg.n_sub_qry} class="border text-sm rounded-lg block w-full p-2.5 bg-gray-700 border-gray-600 placeholder-gray-400 text-white focus:ring-blue-500 focus:border-blue-500">
+            <option value={0}>0</option>
+            <option value={1}>1</option>
+            <option value={2}>2</option>
+            <option value={3}>3</option>
+            <option value={4}>4</option>
+          </select>
+        </div>
+        <div class="flex flex-row gap-1 items-center">
+          <span class="text-xs">Adjacent</span>
+          <select bind:value={searchCfg.k_adjacent} class="border text-sm rounded-lg block w-full p-2.5 bg-gray-700 border-gray-600 placeholder-gray-400 text-white focus:ring-blue-500 focus:border-blue-500">
+            <option value={0}>0</option>
+            <option value={1}>1</option>
+            <option value={2}>2</option>
+            <option value={3}>3</option>
+          </select>
+        </div>
+        <div class="flex flex-row gap-1 items-center">
+          <span class="text-xs">Max Results</span>
+          <select bind:value={searchCfg.max_result} class="border text-sm rounded-lg block w-full p-2.5 bg-gray-700 border-gray-600 placeholder-gray-400 text-white focus:ring-blue-500 focus:border-blue-500">
+            <option value={2}>2</option>
+            <option value={4}>4</option>
+            <option value={6}>6</option>
+            <option value={8}>8</option>
+            <option value={10}>10</option>
+          </select>
+        </div>
       </div>
     </div>
     <button class="ml-auto button blue" on:click={folderPicker}>+ 📂</button>

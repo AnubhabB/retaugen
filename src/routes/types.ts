@@ -20,7 +20,8 @@ export interface SearchResult {
     files: string[],
     evidence: Evidence[],
     answer: string,
-    cfg: SearchConfig
+    cfg: SearchConfig,
+    elapsed?: number
 }
 
 export interface Evidence {

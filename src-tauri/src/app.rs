@@ -22,7 +22,7 @@ use crate::{
     docs::{Extractor, ExtractorEvt},
     embed::Embed,
     gen::{Generator, QueryMore},
-    store::{Data, FileKind, Store, StoreDataRepr},
+    store::{FileKind, Store, StoreDataRepr},
     utils::select_device,
 };
 
@@ -64,6 +64,9 @@ pub struct App {
 }
 
 impl App {
+    // max tokens allowed in context
+    const MAX_CTX_TOK: usize = 2800;
+
     /// Create a new instance of the app
     pub fn new(appdir: &Path, models_dir: &Path) -> Result<Self> {
         let storage_dir = appdir.join("store");
@@ -109,12 +112,12 @@ impl App {
             match evt {
                 Event::Search((qry, cfg, w)) => {
                     if let Err(e) = app.search(&qry, &cfg, &w).await {
-                        eprintln!("Error while searching: {e:?}");
+                        println!("Error while searching: {e:?}");
                     }
                 }
                 Event::Index((dir, w)) => {
                     if let Err(e) = app.index(dir.as_path(), &w).await {
-                        eprintln!("Error while indexing {dir:?}: {e:?}");
+                        println!("Error while indexing {dir:?}: {e:?}");
                     }
                 }
             }
@@ -182,7 +185,7 @@ impl App {
                 extractor.estimate(send.clone());
 
                 if let Err(e) = extractor.extract(send.clone()) {
-                    eprintln!("App.index: trying to call extract: {e:?}");
+                    println!("App.index: trying to call extract: {e:?}");
                 }
             });
 
@@ -204,7 +207,7 @@ impl App {
                             f2t = d.concat();
                         }
                         Err(e) => {
-                            eprintln!("App.index: error while parsing data: {e:?}");
+                            println!("App.index: error while parsing data: {e:?}");
                         }
                     },
                 }
@@ -264,6 +267,7 @@ pub struct SearchResult {
     files: Vec<String>,
     evidence: Vec<Evidence>,
     answer: String,
+    elapsed: f32,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -341,7 +345,7 @@ impl App {
             let llm = if let Some(gen) = gen.as_mut() {
                 gen
             } else {
-                eprintln!("App::search: LLaMA not loaded!");
+                println!("App::search: LLaMA not loaded!");
                 return Err(anyhow!("Error Loading Generator"));
             };
 
@@ -429,7 +433,7 @@ impl App {
             .chunks(8)
             .filter_map(|c| {
                 let batched = c.par_iter().map(|k| (k.0, k.2.clone())).collect::<Vec<_>>();
-                llm.find_relevant(&qry, &batched).ok()
+                llm.find_relevant(qry, &batched).ok()
             })
             .flatten()
             .filter(|j| {
@@ -511,7 +515,9 @@ impl App {
         Ok(enhanced)
     }
 
-    // So we have a total context length of *4096* tokens - I'll leave 1/4th of that for the final *answer* which leaves us with *3072* tokens for our *context* (including the system prompt). Now, our default prompt without any aditional data takes *~250* tokens, which means we are left with around *2800* tokens for our context.
+    // So we have a total context length of *4096* tokens
+    // leave 1/4th of that for the final *answer* which leaves us with *3072* tokens for our *context* (including the system prompt).
+    // Now, our default prompt without any aditional data takes *~250* tokens, which means we are left with around *2800* tokens for our context.
     // So, we'll define our `threshold` as follows:
     // ```
     // while total context > 2800:
@@ -520,7 +526,7 @@ impl App {
     async fn create_context(
         &self,
         qry: &str,
-        data: &[(usize, String)],
+        data: &mut [(usize, String)],
         window: &Window,
     ) -> Result<String> {
         Self::send_event(
@@ -535,7 +541,112 @@ impl App {
 
         let start = Instant::now();
 
-        todo!()
+        let (mut total_tokens, _, mut max_token_idx) = self.compute_tokens(data).await?;
+
+        // Tracking the number of summaries generated
+        let mut iter = 0;
+
+        while total_tokens > Self::MAX_CTX_TOK {
+            // Break if we have visited at-least data.len() of summaries
+            // Nothing more can be done with this
+            iter += 1;
+            println!("Pre loop[{iter}]:  {total_tokens} {max_token_idx}");
+            if iter > data.len() {
+                break;
+            }
+
+            // This scope is required because the `.lock()` will block and next iterations of tokens will not be computed
+            {
+                // We need to run a summarization pass for max tokens
+                let mut g = self.gen.lock().await;
+                let gen = if let Some(g) = g.as_mut() {
+                    g
+                } else {
+                    return Err(anyhow!("Generator not ready!"));
+                };
+
+                Self::send_event(
+                    window,
+                    OpResult::Status(StatusData {
+                        head: "Context generation: Summarizing a datapoint".to_string(),
+                        body: "Generating summary of a text chunk to fit it in context!".to_string(),
+                        ..Default::default()
+                    }),
+                )
+                .await?;
+
+                let summarystart = Instant::now();
+                let summary = gen.summarize(qry, &data.get(max_token_idx).unwrap().1)?;
+
+                data[max_token_idx] = (
+                    data[max_token_idx].0,
+                    format!("## {}\n{}", summary.heading(), summary.summary()),
+                );
+
+                Self::send_event(
+                    window,
+                    OpResult::Status(StatusData {
+                        head: "Context generation: Datapoint summarized ".to_string(),
+                        time_s: Some((Instant::now() - summarystart).as_secs_f32()),
+                        ..Default::default()
+                    }),
+                )
+                .await?;
+            }
+
+            (total_tokens, _, max_token_idx) = self.compute_tokens(data).await?;
+            println!("In loop[{iter}]: {total_tokens} {max_token_idx}");
+        }
+
+        println!("Begining context generation!");
+
+        let ctx = data
+            .iter()
+            .map(|(idx, txt)| format!("Source: {idx}\n{}\n-------------\n", txt.trim()))
+            .collect::<Vec<_>>()
+            .join("")
+            .trim()
+            .to_string();
+
+        Self::send_event(
+            window,
+            OpResult::Status(StatusData {
+                head: "Context generated".to_string(),
+                time_s: Some((Instant::now() - start).as_secs_f32()),
+                ..Default::default()
+            }),
+        )
+        .await?;
+
+        Ok(ctx)
+    }
+
+    // Computes `token` count related information of given text
+    // returns: (total_tokens, max_tokens, max_token_idx)
+    async fn compute_tokens(&self, data: &[(usize, String)]) -> Result<(usize, usize, usize)> {
+        let mut g = self.gen.lock().await;
+        let gen = if let Some(g) = g.as_mut() {
+            g
+        } else {
+            return Err(anyhow!("Generator not ready!"));
+        };
+
+        // Total size of encoded tokens
+        let mut total_tokens = 0;
+        // Chunk with max tokens
+        let mut max_token_idx = 0;
+        let mut max_tokens = 0;
+
+        data.iter().enumerate().for_each(|(i, (_, txt))| {
+            let tokenized = gen.tokenize(txt).unwrap().len();
+            total_tokens += tokenized;
+            if tokenized > max_tokens {
+                max_token_idx = i;
+                max_tokens = tokenized;
+            }
+        });
+
+        Ok((total_tokens, max_tokens, max_token_idx))
     }
 
     // Trigger the search flow - the search pipeline
@@ -546,7 +657,7 @@ impl App {
         };
 
         if let Err(e) = self.ensure_generator(res_send).await {
-            eprintln!("App::search: error while loading LLaMA: {e:?}");
+            println!("App::search: error while loading LLaMA: {e:?}");
             Self::send_event(
                 res_send,
                 OpResult::Error("Error Loading Generator".to_string()),
@@ -556,12 +667,14 @@ impl App {
             return Err(anyhow!("Error Loading Generator"));
         }
 
+        let search_start = Instant::now();
+
         // Step 1: query preprocessing
         let (qry_more, q_txt, q_tensor) =
             match self.query_preproc(qry, cfg.n_sub_qry, res_send).await {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("App::search: error during sub query decomposition: {e:?}");
+                    println!("App::search: error during sub query decomposition: {e:?}");
 
                     Self::send_event(
                         res_send,
@@ -635,7 +748,7 @@ impl App {
                 }
             }
             Err(e) => {
-                eprintln!("App::search: error during relevance filtering: {e:?}");
+                println!("App::search: error during relevance filtering: {e:?}");
 
                 Self::send_event(
                     res_send,
@@ -648,13 +761,13 @@ impl App {
         };
 
         // Step 4: context augmentation - get adjacent data
-        let enhanced = match self
+        let mut enhanced = match self
             .k_adjacent(cfg.k_adjacent, &relevant[..], res_send)
             .await
         {
             Ok(e) => e,
             Err(e) => {
-                eprintln!(
+                println!(
                     "App::search: error during fetching of {} adjacent: {e:?}",
                     cfg.k_adjacent
                 );
@@ -671,10 +784,13 @@ impl App {
 
         // We have enhanced context now, let's summarize the context if needed
         let qry_str = q_txt.join("\n");
-        let ctx = match self.create_context(&qry_str, &enhanced[..], res_send).await {
+        let ctx = match self
+            .create_context(&qry_str, &mut enhanced[..], res_send)
+            .await
+        {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("App::search: generating context: {e:?}");
+                println!("App::search: generating context: {e:?}");
                 Self::send_event(
                     res_send,
                     OpResult::Error("Error generating context".to_string()),
@@ -685,141 +801,95 @@ impl App {
             }
         };
 
-        // let (ctx, elapsed) = {
-        //     let mut gen = self.gen.lock().await;
-        //     let llm = if let Some(gen) = gen.as_mut() {
-        //         gen
-        //     } else {
-        //         return Err(anyhow!("generator not found"));
-        //     };
+        println!("Final Context: {}", ctx);
 
-        //     let start = Instant::now();
+        if ctx.is_empty() && !cfg.allow_without_evidence {
+            return Self::send_event(res_send, OpResult::Error("Nothing found!".to_string())).await;
+        }
 
-        //     let context = relevant
-        //         .iter()
-        //         .filter_map(|(idx, _)| {
-        //             let a = store.with_k_adjacent(*idx, cfg.k_adjacent).ok()?;
-        //             let txt = [a.0.join("\n").as_str(), &a.1, a.2.join("\n").as_str()].join("\n\n");
+        // Step 5: Finally the answer
+        Self::send_event(
+            res_send,
+            OpResult::Status(StatusData {
+                head: "Generating answer!".to_string(),
+                body: String::new(),
+                ..Default::default()
+            }),
+        )
+        .await?;
 
-        //             let summary = llm.summarize(&qry_str, &txt).ok()?;
-        //             let txt = if !summary.heading().is_empty() && !summary.summary().is_empty() {
-        //                 format!(
-        //                     "Source: {idx}\n## {}\n{}",
-        //                     summary.heading(),
-        //                     summary.summary()
-        //                 )
-        //             } else {
-        //                 txt
-        //             };
+        let (ans, elapsed) = {
+            let mut gen = self.gen.lock().await;
+            let llm = if let Some(gen) = gen.as_mut() {
+                gen
+            } else {
+                return Err(anyhow!("generator not found"));
+            };
 
-        //             Some(txt)
-        //         })
-        //         .collect::<Vec<_>>()
-        //         .join("\n\n");
+            let start = Instant::now();
+            let answer = llm.answer(qry_more.topic(), qry_more.source(), &ctx)?;
 
-        //     (
-        //         context.trim().to_string(),
-        //         (Instant::now() - start).as_secs_f32(),
-        //     )
-        // };
+            (answer, (Instant::now() - start).as_secs_f32())
+        };
 
-        // println!("Final Context: {}", ctx);
+        Self::send_event(
+            res_send,
+            OpResult::Status(StatusData {
+                head: "Finally, generated answer!".to_string(),
+                body: String::new(),
+                time_s: Some(elapsed),
+                ..Default::default()
+            }),
+        )
+        .await?;
 
-        // if ctx.is_empty() && !cfg.allow_without_evidence {
-        //     return Self::send_event(res_send, OpResult::Error("Nothing found!".to_string())).await;
-        // }
+        final_result.answer = ans.answer().to_string();
 
-        // Self::send_event(
-        //     res_send,
-        //     OpResult::Status(StatusData {
-        //         head: "Enhanced search context generated".to_string(),
-        //         body: String::new(),
-        //         time_s: Some(elapsed),
-        //         hint: Some(ctx.clone()),
-        //     }),
-        // )
-        // .await?;
+        if ctx.is_empty() {
+            final_result.files = Vec::new();
+            final_result.evidence = Vec::new();
+        } else {
+            let mut file_list = HashSet::new();
+            println!("Num Evidence: {}", ans.evidence().len());
+            final_result.evidence = ans
+                .evidence()
+                .iter()
+                .filter_map(|e| {
+                    let evidence = res_map.get(&e.index())?;
+                    let (file, page) = match evidence {
+                        FileKind::Pdf((pth, pg)) => {
+                            file_list.insert(pth.to_owned());
+                            (pth.to_str()?.to_string(), Some(*pg))
+                        }
+                        FileKind::Text(pth) => {
+                            file_list.insert(pth.to_owned());
+                            (pth.to_str()?.to_string(), None)
+                        }
+                        FileKind::Html(pth) => {
+                            file_list.insert(pth.to_owned());
+                            (pth.to_str()?.to_string(), None)
+                        }
+                    };
 
-        // // Step 5: Finally the answer
-        // Self::send_event(
-        //     res_send,
-        //     OpResult::Status(StatusData {
-        //         head: "Generating answer!".to_string(),
-        //         body: String::new(),
-        //         ..Default::default()
-        //     }),
-        // )
-        // .await?;
+                    Some(Evidence {
+                        text: e.text().to_string(),
+                        file,
+                        page,
+                    })
+                })
+                .collect::<Vec<_>>();
 
-        // let (ans, elapsed) = {
-        //     let mut gen = self.gen.lock().await;
-        //     let llm = if let Some(gen) = gen.as_mut() {
-        //         gen
-        //     } else {
-        //         return Err(anyhow!("generator not found"));
-        //     };
+            final_result.files = file_list
+                .iter()
+                .filter_map(|f| f.to_str().map(|s| s.to_string()))
+                .collect::<Vec<_>>();
 
-        //     let start = Instant::now();
-        //     let answer = llm.answer(qry_more.topic(), qry_more.source(), &ctx)?;
+            println!("{:?}", final_result.files);
+        }
 
-        //     (answer, (Instant::now() - start).as_secs_f32())
-        // };
+        final_result.elapsed = (Instant::now() - search_start).as_secs_f32();
 
-        // Self::send_event(
-        //     res_send,
-        //     OpResult::Status(StatusData {
-        //         head: "Finally, generated answer!".to_string(),
-        //         body: String::new(),
-        //         time_s: Some(elapsed),
-        //         ..Default::default()
-        //     }),
-        // )
-        // .await?;
-
-        // final_result.answer = ans.answer().to_string();
-
-        // if ctx.is_empty() {
-        //     final_result.files = Vec::new();
-        //     final_result.evidence = Vec::new();
-        // } else {
-        //     let mut file_list = HashSet::new();
-        //     println!("Num Evidence: {}", ans.evidence().len());
-        //     final_result.evidence = ans
-        //         .evidence()
-        //         .iter()
-        //         .filter_map(|e| {
-        //             let evidence = res_map.get(&e.index())?;
-        //             let (file, page) = match evidence {
-        //                 FileKind::Pdf((pth, pg)) => {
-        //                     file_list.insert(pth.to_owned());
-        //                     (pth.to_str()?.to_string(), Some(*pg))
-        //                 }
-        //                 FileKind::Text(pth) => {
-        //                     file_list.insert(pth.to_owned());
-        //                     (pth.to_str()?.to_string(), None)
-        //                 }
-        //                 FileKind::Html(pth) => {
-        //                     file_list.insert(pth.to_owned());
-        //                     (pth.to_str()?.to_string(), None)
-        //                 }
-        //             };
-
-        //             Some(Evidence {
-        //                 text: e.text().to_string(),
-        //                 file,
-        //                 page,
-        //             })
-        //         })
-        //         .collect::<Vec<_>>();
-        //     println!("Num Evidence Later: {}", final_result.evidence.len());
-        //     final_result.files = file_list
-        //         .iter()
-        //         .filter_map(|f| f.to_str().map(|s| s.to_string()))
-        //         .collect::<Vec<_>>();
-        //     println!("{:?}", final_result.files);
-        // }
-
-        // Self::send_event(res_send, OpResult::Result(final_result)).await?;
+        Self::send_event(res_send, OpResult::Result(final_result)).await?;
 
         Ok(())
     }

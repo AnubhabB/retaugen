@@ -245,8 +245,9 @@ Answer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_i
 
 #[derive(Debug, Deserialize)]
 pub struct Evidence {
-    #[serde(rename = "source")]
+    #[serde(rename = "source_id")]
     index: usize,
+    #[serde(rename = "excerpt")]
     text: String,
 }
 
@@ -282,23 +283,22 @@ impl Generator {
         let prompt = format!(
 "<|start_header_id|>system<|end_header_id|>
 
-You are a context-based question answering AI. You retrieve information from provided context to answer user queries. Based on the provided context, generate a informative, compete, relevant yet concise response to the given query by following the given requirments.<|eot_id|><|start_header_id|>user<|end_header_id|>
+You are a context-based question answering AI. You understand, retrieve and analyze information from provided context to answer user's query. Based on the provided context, generate a informative, complete, relevant yet concise response to the user query. You must follow the given requirements while writing your answer.<|eot_id|><|start_header_id|>user<|end_header_id|>
 
-Text in the given context are extracted with approximate search of a text corpus. You want to find out information about \"{topic}\" only if present in the given context.
-
+Text in the context below are extracted with approximate search of a text corpus and contains the source id associated with each datapoint. You have to find out information about \"{topic}\" and respond to the user's query only if it can be derived from the given context.
 
 Context:
-
+```
 {context}
-
+```
 
 Query:
-
+```
 {query}
-
+```
 
 Requirements:
-- Answer must be supported by at least one datapoint in the given context, extract the supporting text along with the associated source id as evidence.
+- Your answer must be supported by at least one source from the given context. Extract the supporting text data along with the associated source id as evidence.
 - Use natural language summary for your answer and avoid copying from given context for your answer.
 - Truthfully return empty string (\"\") for answer if the given context doesn't contain the answer to the query.
 - Do not write an introduction or summary.
@@ -308,14 +308,14 @@ Requirements:
 Schema:
 
 {{
-    evidence: Array<{{source: int, text: string}}>,
+    evidence: Array<{{source_id: int, excerpt: string}}>,
     answer: string
 }}
     
 Your answer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
 {{
-    \"evidence\": [{{\"source\": "
+    \"evidence\": [{{\"excerpt\": \""
         );
 
         let mut tk = self.generate(&prompt)?;
@@ -326,7 +326,7 @@ Your answer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_hea
 
         // println!("Op:\n{{\n  \"evidence\": [{{\"source\": {tk}");
 
-        serde_json::from_str(format!("{{\n\t\"evidence\": [{{\"source\": {tk}").as_str()).map_err(
+        serde_json::from_str(format!("{{\n\t\"evidence\": [{{\"excerpt\": \"{tk}").as_str()).map_err(
             |e| {
                 println!("Answer.Error:\n{tk}");
                 anyhow!(e)

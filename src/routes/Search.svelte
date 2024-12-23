@@ -35,7 +35,12 @@
 
 <div class="grid grid-cols-[24px_calc(100%-24px)]">
     <div>Q.</div>
-    <div class="font-medium text-gray-400">{search.qry}</div>
+    <span class="flex flex-row">
+        <div class="font-medium text-gray-400">{search.qry}</div>
+        {#if search.elapsed}
+        <div class="font-medium text-green-400 text-xs">{search.elapsed}s</div>
+        {/if}
+    </span>
     <div>A.</div>
     <div class="flex flex-col">
         {#if searching}
@@ -57,18 +62,6 @@
                 </div>
             </div>
         {/if}
-        <!-- {#if search.files.length}
-        <div class="flex flex-col py-2">
-            <div class="text-sm font-bold text-gray-400">Files</div>
-            <div class="flex flex-row gap-2">
-                {#each search.files as f }
-                    <div class="aspect-square overflow-hidden w-24">
-                        <Thumb path={f[1]}/>
-                    </div>
-                {/each}
-            </div>
-        </div>
-        {/if} -->
     </div>
 </div>
 
