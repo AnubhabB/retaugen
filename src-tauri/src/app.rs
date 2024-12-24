@@ -403,7 +403,7 @@ impl App {
     ) -> Result<Vec<usize>> {
         // A relevance cutoff greater than `0` means we have activated the flow
         if cutoff == 0. {
-            return Ok(Vec::new());
+            return Ok(res.iter().map(|k| k.0).collect::<Vec<_>>());
         }
 
         Self::send_event(
@@ -448,7 +448,7 @@ impl App {
 
         relevant.par_sort_by(|a, b| b.1.total_cmp(&a.1));
 
-        println!("Relevant: {relevant:?}");
+        // println!("Relevant: {relevant:?}");
 
         Self::send_event(
             window,
@@ -740,7 +740,7 @@ impl App {
         {
             Ok(r) => {
                 if r.is_empty() {
-                    res
+                    vec![]
                 } else {
                     r.iter()
                         .filter_map(|idx| {
@@ -851,7 +851,7 @@ impl App {
             final_result.evidence = Vec::new();
         } else {
             let mut file_list = HashSet::new();
-            println!("Num Evidence: {}", ans.evidence().len());
+
             final_result.evidence = ans
                 .evidence()
                 .iter()
@@ -884,8 +884,6 @@ impl App {
                 .iter()
                 .filter_map(|f| f.to_str().map(|s| s.to_string()))
                 .collect::<Vec<_>>();
-
-            println!("{:?}", final_result.files);
         }
 
         final_result.elapsed = (Instant::now() - search_start).as_secs_f32();
