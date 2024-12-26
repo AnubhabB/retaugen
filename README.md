@@ -20,6 +20,10 @@ https://github.com/user-attachments/assets/0e38ab1c-f71f-493e-a827-a94ae14a01e2
 
 **This video has been sped up**
 
+## Note:
+This is an **Experiment** and **NOT** a production ready system!
+
+If you build something cool with this and/ or extend this for fun feel free to create a PR.
 
 ## License
 
