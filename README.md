@@ -14,6 +14,8 @@ This is a *almost* framework free, hands on implementation in Rust and a detaile
 
 ## Output:
 
+https://github.com/user-attachments/assets/0e38ab1c-f71f-493e-a827-a94ae14a01e2
+
 
 
 **This video has been sped up**
