@@ -141,7 +141,6 @@ impl PdfProc {
                                 .replace("\r\n", "\n");
 
                             Some(match e.kind() {
-                                // We are using `MarkDownSplitter` for our text splitting task
                                 // Here we are adding `##` to mark the generated text as title
                                 DetectedElem::Title => {
                                     format!("## {}\n", text.replace("\n", "; "))
