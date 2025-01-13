@@ -73,7 +73,7 @@ impl Generator {
 
     // A utility function to load the model and tokenizer
     fn load_model(model_dir: &Path, device: &Device) -> Result<(Llama, Config, Tokenizer)> {
-        // let model_file = model_dir.join(Self::MODEL_FILE);
+
         let tok_file = model_dir.join(Self::TOKENIZER_FILE);
         let cfg_file = model_dir.join(Self::MODEL_CONFIG_FILE);
         let model_files = Self::MODEL_FILES
@@ -544,52 +544,6 @@ mod tests {
         )?;
 
         println!("{ans:?}");
-        Ok(())
-    }
-
-    #[test]
-    fn temp_count_tokens() -> Result<()> {
-        let prompt = "<|start_header_id|>system<|end_header_id|>
-
-You are a context-based question answering AI. You retrieve information from provided context to answer user queries. Based on the provided context, generate a informative, compete, relevant yet concise response to the given query by following the given requirments.<|eot_id|><|start_header_id|>user<|end_header_id|>
-
-Text in the given context are extracted with approximate search of a text corpus. You want to find out information about \"\" only if present in the given context.
-
-
-Context:
-
-
-
-
-Query:
-
-
-
-
-Requirements:
-- Answer must be supported by at least one datapoint in the given context, extract the supporting text along with the associated source id as evidence.
-- Use natural language summary for your answer and avoid copying from given context for your answer.
-- Truthfully return empty string (\"\") for answer if the given context doesn't contain the answer to the query.
-- Do not write an introduction or summary.
-- Your response must be a valid json of the following Schema.
-
-
-Schema:
-
-{{
-    evidence: Array<{{source: int, text: string}}>,
-    answer: string
-}}
-    
-Your answer must be a valid json.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-
-{{
-    \"evidence\": [{{\"source\": ";
-
-        let tokenizer = super::Tokenizer::from_file("../models/llama_tokenizer.json").unwrap();
-        let tkz = tokenizer.encode(prompt, true).unwrap();
-
-        println!("{}", tkz.len());
         Ok(())
     }
 }

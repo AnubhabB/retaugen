@@ -320,7 +320,7 @@ impl Store {
         let mut bm25_max = 0_f32;
         let mut bm25_min = f32::MAX;
 
-        let has_bm_25 = bm25.as_ref().map_or(false, |b| b.is_empty());
+        let has_bm_25 = bm25.as_ref().is_some_and(|b| b.is_empty());
 
         let bm25_div = if has_bm_25 {
             if let Some(b) = bm25.as_ref() {

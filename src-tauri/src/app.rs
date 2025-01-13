@@ -142,7 +142,7 @@ impl App {
         path.read_dir()?
             .filter_map(|f| {
                 if let Ok(p) = f {
-                    if p.metadata().map_or(false, |f| f.is_file()) {
+                    if p.metadata().is_ok_and(|f| f.is_file()) {
                         Some(p)
                     } else {
                         None

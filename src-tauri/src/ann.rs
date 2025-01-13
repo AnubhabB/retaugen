@@ -70,10 +70,7 @@ impl ANNIndex {
         // Classify the vectors as being above or below
         let (mut above, mut below) = (vec![], vec![]);
         for &id in indexes.iter() {
-            if hyperplane
-                .point_is_above(&all_vecs.i(id)?)
-                .map_or(false, |d| d)
-            {
+            if hyperplane.point_is_above(&all_vecs.i(id)?).is_ok_and(|d| d) {
                 above.push(id)
             } else {
                 below.push(id)
@@ -120,10 +117,7 @@ impl ANNIndex {
                 num_candidates_found
             }
             Node::Inner(inner) => {
-                let above = (inner)
-                    .hyperplane
-                    .point_is_above(query)
-                    .map_or(false, |d| d);
+                let above = (inner).hyperplane.point_is_above(query).is_ok_and(|d| d);
                 let (main, backup) = match above {
                     true => (&(inner.right_node), &(inner.left_node)),
                     false => (&(inner.left_node), &(inner.right_node)),
