@@ -4,7 +4,7 @@ This **Experimental** project is a part of my effort at demystifying **R**etriev
 
 ## Outline:
 
-This is a *almost* framework free, hands on implementation in Rust and a detailed and step-by-step guide to building this can be found in this [series: Desktop App for Document QA with RAG](https://blog.anubhab.me/series/desktop-app-for-document-qa-with-rag/). Here's the outline of what to expect:
+This is a *almost* framework free, hands on implementation in Rust and a detailed and step-by-step guide to building this can be found in this [series: Desktop App for Document QA with RAG](https://blog.anubhab.me/tech/rag-desktop-app/). Here's the outline of what to expect:
 
 - [**Part 1: Generating Embeddings**](https://blog.anubhab.me/tech/rag-desktop-app/part-1/): we implement a workflow to generate Embeddings from text data using [Stella_en_1.5B_v5](https://huggingface.co/dunzhang/stella_en_1.5B_v5) and some context-aware text-splitting techniques using the crate `text-splitter`.
 - [**Part 2: Vector Storage**](https://blog.anubhab.me/tech/rag-desktop-app/part-2/) we’ll build our own mini Vector Store inspired by [Spotify’s ANNOY](https://github.com/spotify/annoy).
